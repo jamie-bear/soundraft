@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { tracksApi, commentsApi, attachmentsApi, Track, TrackVersion, Comment, Attachment, getAssetUrl } from '../lib/api'
 import { usePlayerStore } from '../stores/playerStore'
 import CommentSection from '../components/CommentSection'
@@ -23,6 +23,7 @@ const statusColors: Record<string, string> = {
 
 export default function TrackDetail({ shared = false }: TrackDetailProps) {
   const { id, token } = useParams<{ id?: string; token?: string }>()
+  const navigate = useNavigate()
   const playTrack = usePlayerStore((state) => state.playTrack)
   const currentTrack = usePlayerStore((state) => state.currentTrack)
   const isPlaying = usePlayerStore((state) => state.isPlaying)
@@ -192,6 +193,20 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
     }
   }
 
+  const handleDelete = async () => {
+    if (!track || !isOwner) return
+    
+    const confirmed = window.confirm(`Are you sure you want to delete "${track.title}"? This action cannot be undone.`)
+    if (!confirmed) return
+
+    try {
+      await tracksApi.delete(track.id)
+      navigate('/')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete track')
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -274,11 +289,14 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
                   value={track.status}
                   onChange={(e) => handleStatusChange(e.target.value as Track['status'])}
                   className={`rounded-full px-2.5 py-0.5 text-xs font-medium border-0 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500/50 ${statusColors[track.status] || 'bg-surface-700 text-surface-300'}`}
+                  style={{ 
+                    backgroundImage: 'none',
+                  }}
                 >
-                  <option value="POC">POC</option>
-                  <option value="DRAFT">DRAFT</option>
-                  <option value="WIP">WIP</option>
-                  <option value="FINAL">FINAL</option>
+                  <option value="POC" className="bg-surface-800 text-white">POC</option>
+                  <option value="DRAFT" className="bg-surface-800 text-white">DRAFT</option>
+                  <option value="WIP" className="bg-surface-800 text-white">WIP</option>
+                  <option value="FINAL" className="bg-surface-800 text-white">FINAL</option>
                 </select>
               ) : (
                 <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColors[track.status] || 'bg-surface-700 text-surface-300'}`}>
@@ -366,6 +384,15 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
                   </svg>
                   Share
+                </button>
+                <button
+                  onClick={handleDelete}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-red-600/10 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-600/20 hover:text-red-300 transition-colors"
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  Delete
                 </button>
                 <input
                   ref={fileInputRef}

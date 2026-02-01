@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
   DndContext,
   closestCenter,
@@ -113,6 +113,7 @@ function SortableTrack({ track, isOwner, onPlay, currentTrackId, isPlaying }: So
 
 export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) {
   const { id, token } = useParams<{ id?: string; token?: string }>()
+  const navigate = useNavigate()
   const playTrack = usePlayerStore((state) => state.playTrack)
   const currentTrack = usePlayerStore((state) => state.currentTrack)
   const isPlaying = usePlayerStore((state) => state.isPlaying)
@@ -257,6 +258,20 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
     }
   }
 
+  const handleDelete = async () => {
+    if (!playlist || !isOwner) return
+    
+    const confirmed = window.confirm(`Are you sure you want to delete "${playlist.title}"? This action cannot be undone.`)
+    if (!confirmed) return
+
+    try {
+      await playlistsApi.delete(playlist.id)
+      navigate('/')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete playlist')
+    }
+  }
+
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event
 
@@ -382,6 +397,15 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
                 className="rounded-lg bg-surface-800 px-3 py-2 text-sm font-medium text-white hover:bg-surface-700 transition-colors"
               >
                 Duplicate
+              </button>
+              <button
+                onClick={handleDelete}
+                className="flex items-center gap-2 rounded-lg bg-red-600/10 px-3 py-2 text-sm font-medium text-red-400 hover:bg-red-600/20 hover:text-red-300 transition-colors"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                Delete
               </button>
             </div>
           )}
