@@ -4,6 +4,9 @@ const { Pool } = require('pg');
 const Minio = require('minio');
 const bcrypt = require('bcrypt');
 const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -48,6 +51,7 @@ async function initialize() {
     }
 
     // Seed admin user if not exists
+    let adminUserId;
     try {
         const adminEmail = process.env.ADMIN_EMAIL;
         const adminPassword = process.env.ADMIN_PASSWORD;
@@ -60,18 +64,163 @@ async function initialize() {
             
             if (existing.rows.length === 0) {
                 const hash = await bcrypt.hash(adminPassword, 10);
-                await pool.query(
-                    'INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3)',
+                const result = await pool.query(
+                    'INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id',
                     [adminEmail, hash, 'ADMIN']
                 );
+                adminUserId = result.rows[0].id;
                 console.log(`Admin user created: ${adminEmail}`);
             } else {
+                adminUserId = existing.rows[0].id;
                 console.log(`Admin user exists: ${adminEmail}`);
             }
         }
     } catch (err) {
         console.error('Admin seed error:', err.message);
     }
+
+    // Seed example track and playlist for admin
+    if (adminUserId) {
+        try {
+            await seedExampleContent(adminUserId);
+        } catch (err) {
+            console.error('Example content seed error:', err.message);
+        }
+    }
+}
+
+// Helper function to extract title from filename
+function extractTitle(filename) {
+    // Remove extension
+    const nameWithoutExt = filename.replace(/\.[^/.]+$/, '');
+    // Remove text in brackets at the beginning
+    const title = nameWithoutExt.replace(/^\([^)]*\)\s*/, '').trim();
+    return title;
+}
+
+// Seed example track and playlist
+async function seedExampleContent(adminUserId) {
+    // Check if admin already has tracks
+    const existingTracks = await pool.query(
+        'SELECT id FROM tracks WHERE owner_id = $1 LIMIT 1',
+        [adminUserId]
+    );
+    
+    if (existingTracks.rows.length > 0) {
+        console.log('Admin already has tracks, skipping example content seeding');
+        return;
+    }
+
+    const exampleDir = path.join(__dirname, '../knowledge-base/example track+playlist');
+    
+    // Check if example directory exists
+    if (!fs.existsSync(exampleDir)) {
+        console.log('Example content directory not found, skipping seeding');
+        return;
+    }
+
+    const files = fs.readdirSync(exampleDir);
+    const trackFile = files.find(f => f.includes('Example Track') && f.endsWith('.wav'));
+    const trackCoverFile = files.find(f => f.includes('Example Track') && (f.endsWith('.jpg') || f.endsWith('.png')));
+    const playlistCoverFile = files.find(f => f.includes('Example Playlist') && (f.endsWith('.jpg') || f.endsWith('.png')));
+
+    if (!trackFile) {
+        console.log('No example track file found');
+        return;
+    }
+
+    console.log('Seeding example content...');
+
+    // Extract titles
+    const trackTitle = extractTitle(trackFile);
+    const playlistTitle = playlistCoverFile ? extractTitle(playlistCoverFile) : 'My First Playlist';
+
+    // 1. Create track
+    const trackResult = await pool.query(
+        'INSERT INTO tracks (owner_id, title, status) VALUES ($1, $2, $3) RETURNING id',
+        [adminUserId, trackTitle, 'WIP']
+    );
+    const trackId = trackResult.rows[0].id;
+    console.log(`Created track: ${trackTitle}`);
+
+    // 2. Upload track audio file
+    const trackFilePath = path.join(exampleDir, trackFile);
+    const trackBuffer = fs.readFileSync(trackFilePath);
+    const trackStorageKey = `tracks/${trackId}/versions/${crypto.randomBytes(16).toString('hex')}.wav`;
+    
+    await minioClient.putObject(BUCKET_NAME, trackStorageKey, trackBuffer, {
+        'Content-Type': 'audio/wav'
+    });
+
+    // Get audio duration (simplified - just set a placeholder)
+    const durationSeconds = 180; // 3 minutes placeholder
+
+    // Create version
+    const versionResult = await pool.query(
+        'INSERT INTO track_versions (track_id, version_number, storage_key, file_size, duration_seconds) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [trackId, 1, trackStorageKey, trackBuffer.length, durationSeconds]
+    );
+    const versionId = versionResult.rows[0].id;
+
+    // Set as current version
+    await pool.query(
+        'UPDATE tracks SET current_version_id = $1, current_version_number = 1, duration_seconds = $2 WHERE id = $3',
+        [versionId, durationSeconds, trackId]
+    );
+    console.log(`Uploaded track audio file`);
+
+    // 3. Upload track cover art
+    if (trackCoverFile) {
+        const coverFilePath = path.join(exampleDir, trackCoverFile);
+        const coverBuffer = fs.readFileSync(coverFilePath);
+        const coverExt = path.extname(trackCoverFile);
+        const coverStorageKey = `tracks/${trackId}/cover${coverExt}`;
+        
+        await minioClient.putObject(BUCKET_NAME, coverStorageKey, coverBuffer, {
+            'Content-Type': `image/${coverExt === '.jpg' ? 'jpeg' : 'png'}`
+        });
+
+        await pool.query(
+            'UPDATE tracks SET cover_art_path = $1 WHERE id = $2',
+            [`/api/assets/${coverStorageKey}`, trackId]
+        );
+        console.log(`Uploaded track cover art`);
+    }
+
+    // 4. Create playlist
+    const playlistResult = await pool.query(
+        'INSERT INTO playlists (owner_id, title, type) VALUES ($1, $2, $3) RETURNING id',
+        [adminUserId, playlistTitle, 'ALBUM']
+    );
+    const playlistId = playlistResult.rows[0].id;
+    console.log(`Created playlist: ${playlistTitle}`);
+
+    // 5. Add track to playlist
+    await pool.query(
+        'INSERT INTO playlist_tracks (playlist_id, track_id, sort_order) VALUES ($1, $2, $3)',
+        [playlistId, trackId, 0]
+    );
+    console.log(`Added track to playlist`);
+
+    // 6. Upload playlist cover art
+    if (playlistCoverFile) {
+        const playlistCoverPath = path.join(exampleDir, playlistCoverFile);
+        const playlistCoverBuffer = fs.readFileSync(playlistCoverPath);
+        const playlistCoverExt = path.extname(playlistCoverFile);
+        const playlistCoverStorageKey = `playlists/${playlistId}/cover${playlistCoverExt}`;
+        
+        await minioClient.putObject(BUCKET_NAME, playlistCoverStorageKey, playlistCoverBuffer, {
+            'Content-Type': `image/${playlistCoverExt === '.jpg' ? 'jpeg' : 'png'}`
+        });
+
+        await pool.query(
+            'UPDATE playlists SET cover_art_path = $1 WHERE id = $2',
+            [`/api/assets/${playlistCoverStorageKey}`, playlistId]
+        );
+        console.log(`Uploaded playlist cover art`);
+    }
+
+    console.log('Example content seeding completed successfully!');
 }
 
 // --- Routes ---
