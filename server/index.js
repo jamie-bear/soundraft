@@ -89,15 +89,6 @@ async function initialize() {
     }
 }
 
-// Helper function to extract title from filename
-function extractTitle(filename) {
-    // Remove extension
-    const nameWithoutExt = filename.replace(/\.[^/.]+$/, '');
-    // Remove text in brackets at the beginning
-    const title = nameWithoutExt.replace(/^\([^)]*\)\s*/, '').trim();
-    return title;
-}
-
 // Seed example track and playlist
 async function seedExampleContent(adminUserId) {
     // Check if admin already has tracks
@@ -111,29 +102,28 @@ async function seedExampleContent(adminUserId) {
         return;
     }
 
-    const exampleDir = path.join(__dirname, '../knowledge-base/example track+playlist');
+    const seedDir = path.join(__dirname, 'seed-data');
     
-    // Check if example directory exists
-    if (!fs.existsSync(exampleDir)) {
-        console.log('Example content directory not found, skipping seeding');
+    // Check if seed directory exists
+    if (!fs.existsSync(seedDir)) {
+        console.log('Seed data directory not found, skipping seeding');
         return;
     }
 
-    const files = fs.readdirSync(exampleDir);
-    const trackFile = files.find(f => f.includes('Example Track') && f.endsWith('.wav'));
-    const trackCoverFile = files.find(f => f.includes('Example Track') && (f.endsWith('.jpg') || f.endsWith('.png')));
-    const playlistCoverFile = files.find(f => f.includes('Example Playlist') && (f.endsWith('.jpg') || f.endsWith('.png')));
+    // Fixed filenames and titles for seed content
+    const trackFile = 'example-track.wav';
+    const trackCoverFile = 'example-track-cover.jpg';
+    const playlistCoverFile = 'example-playlist-cover.png';
+    const trackTitle = 'Heroplanet - The Greatest Comeback of All Time';
+    const playlistTitle = 'Soundtrack to the Motion Picture';
 
-    if (!trackFile) {
-        console.log('No example track file found');
+    const trackFilePath = path.join(seedDir, trackFile);
+    if (!fs.existsSync(trackFilePath)) {
+        console.log('Example track file not found, skipping seeding');
         return;
     }
 
     console.log('Seeding example content...');
-
-    // Extract titles
-    const trackTitle = extractTitle(trackFile);
-    const playlistTitle = playlistCoverFile ? extractTitle(playlistCoverFile) : 'My First Playlist';
 
     // 1. Create track
     const trackResult = await pool.query(
@@ -144,7 +134,6 @@ async function seedExampleContent(adminUserId) {
     console.log(`Created track: ${trackTitle}`);
 
     // 2. Upload track audio file
-    const trackFilePath = path.join(exampleDir, trackFile);
     const trackBuffer = fs.readFileSync(trackFilePath);
     const trackStorageKey = `tracks/${trackId}/versions/${crypto.randomBytes(16).toString('hex')}.wav`;
     
@@ -170,14 +159,13 @@ async function seedExampleContent(adminUserId) {
     console.log(`Uploaded track audio file`);
 
     // 3. Upload track cover art
-    if (trackCoverFile) {
-        const coverFilePath = path.join(exampleDir, trackCoverFile);
-        const coverBuffer = fs.readFileSync(coverFilePath);
-        const coverExt = path.extname(trackCoverFile);
-        const coverStorageKey = `tracks/${trackId}/cover${coverExt}`;
+    const trackCoverPath = path.join(seedDir, trackCoverFile);
+    if (fs.existsSync(trackCoverPath)) {
+        const coverBuffer = fs.readFileSync(trackCoverPath);
+        const coverStorageKey = `tracks/${trackId}/cover.jpg`;
         
         await minioClient.putObject(BUCKET_NAME, coverStorageKey, coverBuffer, {
-            'Content-Type': `image/${coverExt === '.jpg' ? 'jpeg' : 'png'}`
+            'Content-Type': 'image/jpeg'
         });
 
         await pool.query(
@@ -203,14 +191,13 @@ async function seedExampleContent(adminUserId) {
     console.log(`Added track to playlist`);
 
     // 6. Upload playlist cover art
-    if (playlistCoverFile) {
-        const playlistCoverPath = path.join(exampleDir, playlistCoverFile);
+    const playlistCoverPath = path.join(seedDir, playlistCoverFile);
+    if (fs.existsSync(playlistCoverPath)) {
         const playlistCoverBuffer = fs.readFileSync(playlistCoverPath);
-        const playlistCoverExt = path.extname(playlistCoverFile);
-        const playlistCoverStorageKey = `playlists/${playlistId}/cover${playlistCoverExt}`;
+        const playlistCoverStorageKey = `playlists/${playlistId}/cover.png`;
         
         await minioClient.putObject(BUCKET_NAME, playlistCoverStorageKey, playlistCoverBuffer, {
-            'Content-Type': `image/${playlistCoverExt === '.jpg' ? 'jpeg' : 'png'}`
+            'Content-Type': 'image/png'
         });
 
         await pool.query(
