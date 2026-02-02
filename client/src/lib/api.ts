@@ -16,21 +16,16 @@ function getApiUrl(): string {
 }
 
 const API_URL = getApiUrl()
-const API_BASE = API_URL.replace(/\/api$/, '') // Base URL without /api suffix
 
 // Helper to get full URL for assets (cover art, etc.)
 export function getAssetUrl(path: string | undefined | null): string | undefined {
   if (!path) return undefined
-  // If path starts with /api/, prepend the base URL
-  if (path.startsWith('/api/')) {
-    return `${API_BASE}${path}`
-  }
   // If it's already a full URL, return as-is
   if (path.startsWith('http://') || path.startsWith('https://')) {
     return path
   }
-  // Otherwise, assume it's relative to API base
-  return `${API_BASE}${path}`
+  // Relative paths work directly through Vite proxy (dev) or reverse proxy (prod)
+  return path
 }
 
 interface RequestOptions extends RequestInit {
