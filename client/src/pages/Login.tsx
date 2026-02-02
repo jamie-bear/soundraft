@@ -33,12 +33,12 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-surface-950 p-4">
       <div className="w-full max-w-md">
         {/* Logo */}
-        <div className="mb-8 flex flex-col items-center justify-center gap-3">
-          <div className="flex items-center gap-3">
-            <img src="/soundraft-logo.svg" alt="SoundRaft" className="h-16 w-16" />
-            <span className="text-3xl font-bold text-white">SoundRaft</span>
+        <div className="mb-8 flex flex-col items-center justify-center gap-4">
+          <div className="flex items-center gap-4">
+            <img src="/soundraft-logo.svg" alt="SoundRaft" className="h-24 w-24" />
+            <span className="text-4xl font-bold text-white">SoundRaft</span>
           </div>
-          <p className="text-sm text-surface-400 italic">Draft it up. Sound it out.</p>
+          <p className="text-base text-surface-400 italic">Draft it up. Sound it out.</p>
         </div>
 
         {/* Form */}
