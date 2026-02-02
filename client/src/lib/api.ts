@@ -7,19 +7,12 @@ function getApiUrl(): string {
 
   // SSR/build-time fallback
   if (typeof window === 'undefined') {
-    return 'http://localhost:8080/api'
+    return '/api'
   }
   
-  const { protocol, hostname } = window.location
-  
-  // Development: localhost or 127.0.0.1
-  if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    return 'http://localhost:8080/api'
-  }
-  
-  // Production: use same hostname with backend port 8080
-  // This handles both HTTP and HTTPS automatically
-  return `${protocol}//${hostname}:8080/api`
+  // Use relative path - Vite dev server will proxy to backend
+  // In production, your reverse proxy/tunnel should route /api to backend
+  return '/api'
 }
 
 const API_URL = getApiUrl()

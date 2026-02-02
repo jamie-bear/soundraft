@@ -16,7 +16,15 @@ export default defineConfig(({ mode }) => {
     server: {
       host: true,
       port: 5173,
-      allowedHosts: allowedHosts.length > 0 ? allowedHosts : true
+      allowedHosts: allowedHosts.length > 0 ? allowedHosts : true,
+      // Proxy API requests to backend
+      proxy: {
+        '/api': {
+          target: 'http://api:8080',
+          changeOrigin: true,
+          secure: false
+        }
+      }
     }
   }
 })
