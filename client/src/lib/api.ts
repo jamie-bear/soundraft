@@ -1,4 +1,28 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api'
+// Auto-detect API URL based on where the app is accessed from
+function getApiUrl(): string {
+  // Check for environment variable first (can still be overridden if needed)
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL
+  }
+
+  // SSR/build-time fallback
+  if (typeof window === 'undefined') {
+    return 'http://localhost:8080/api'
+  }
+  
+  const { protocol, hostname } = window.location
+  
+  // Development: localhost or 127.0.0.1
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return 'http://localhost:8080/api'
+  }
+  
+  // Production: use same hostname with backend port 8080
+  // This handles both HTTP and HTTPS automatically
+  return `${protocol}//${hostname}:8080/api`
+}
+
+const API_URL = getApiUrl()
 const API_BASE = API_URL.replace(/\/api$/, '') // Base URL without /api suffix
 
 // Helper to get full URL for assets (cover art, etc.)
