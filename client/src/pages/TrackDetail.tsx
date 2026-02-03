@@ -42,9 +42,12 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
   const [showShareModal, setShowShareModal] = useState(false)
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [editedTitle, setEditedTitle] = useState('')
+  const [isEditingArtist, setIsEditingArtist] = useState(false)
+  const [editedArtist, setEditedArtist] = useState('')
   
   const fileInputRef = useRef<HTMLInputElement>(null)
   const titleInputRef = useRef<HTMLInputElement>(null)
+  const artistInputRef = useRef<HTMLInputElement>(null)
 
   const trackId = shared ? undefined : id
   const shareToken = shared ? token : undefined
@@ -193,6 +196,41 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
     }
   }
 
+  const handleArtistEdit = () => {
+    if (!track || !isOwner) return
+    setEditedArtist(track.artist || '')
+    setIsEditingArtist(true)
+    setTimeout(() => artistInputRef.current?.focus(), 0)
+  }
+
+  const handleArtistSave = async () => {
+    if (!track || !isOwner) {
+      setIsEditingArtist(false)
+      return
+    }
+    
+    if (editedArtist.trim() === (track.artist || '')) {
+      setIsEditingArtist(false)
+      return
+    }
+
+    try {
+      const { track: updatedTrack } = await tracksApi.update(track.id, { artist: editedArtist.trim() })
+      setTrack(updatedTrack)
+      setIsEditingArtist(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update artist')
+    }
+  }
+
+  const handleArtistKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleArtistSave()
+    } else if (e.key === 'Escape') {
+      setIsEditingArtist(false)
+    }
+  }
+
   const handleDelete = async () => {
     if (!track || !isOwner) return
     
@@ -238,13 +276,13 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
         {/* Track Header */}
         <div className="mb-6 flex gap-6">
           {/* Cover Art */}
-          <div className="relative h-40 w-40 shrink-0 rounded-xl bg-surface-800 overflow-hidden">
+          <div className="relative h-60 w-60 shrink-0 rounded-xl bg-surface-800 overflow-hidden">
             {isOwner ? (
               <CoverArtUpload
                 currentCoverUrl={track.cover_art_path}
                 onUpload={handleCoverUpload}
                 onDelete={track.cover_art_path ? handleCoverDelete : undefined}
-                size="md"
+                size="lg"
               />
             ) : (
               <>
@@ -252,7 +290,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
                   <img src={getAssetUrl(track.cover_art_path)} alt="" className="h-full w-full object-cover" />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center">
-                    <svg className="h-16 w-16 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg className="h-20 w-20 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
                     </svg>
                   </div>
@@ -266,13 +304,13 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
                 onClick={handlePlay}
                 className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 hover:opacity-100 transition-opacity"
               >
-                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary-600 text-white shadow-lg">
+                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary-600 text-white shadow-lg">
                   {isCurrentlyPlaying ? (
-                    <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+                    <svg className="h-8 w-8" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
                     </svg>
                   ) : (
-                    <svg className="h-6 w-6 ml-1" fill="currentColor" viewBox="0 0 24 24">
+                    <svg className="h-8 w-8 ml-1" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M8 5v14l11-7z" />
                     </svg>
                   )}
@@ -314,16 +352,38 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
                 onChange={(e) => setEditedTitle(e.target.value)}
                 onBlur={handleTitleSave}
                 onKeyDown={handleTitleKeyDown}
-                className="mb-2 w-full bg-transparent text-2xl font-bold text-white border-b-2 border-primary-500 focus:outline-none"
+                className="mb-1 w-full bg-transparent text-2xl font-bold text-white border-b-2 border-primary-500 focus:outline-none"
               />
             ) : (
               <h1 
-                className={`mb-2 text-2xl font-bold text-white truncate ${isOwner ? 'cursor-pointer hover:text-primary-400 transition-colors' : ''}`}
+                className={`mb-1 text-2xl font-bold text-white line-clamp-2 ${isOwner ? 'cursor-pointer hover:text-primary-400 transition-colors' : ''}`}
                 onClick={isOwner ? handleTitleEdit : undefined}
                 title={isOwner ? 'Click to edit title' : undefined}
               >
                 {track.title}
               </h1>
+            )}
+
+            {/* Editable Artist */}
+            {isEditingArtist ? (
+              <input
+                ref={artistInputRef}
+                type="text"
+                value={editedArtist}
+                onChange={(e) => setEditedArtist(e.target.value)}
+                onBlur={handleArtistSave}
+                onKeyDown={handleArtistKeyDown}
+                className="mb-2 w-full bg-transparent text-lg text-surface-300 border-b border-surface-600 focus:outline-none focus:border-primary-500"
+                placeholder="Add artist name"
+              />
+            ) : (
+              <p 
+                className={`mb-2 text-lg text-surface-300 ${isOwner ? 'cursor-pointer hover:text-white transition-colors' : ''}`}
+                onClick={isOwner ? handleArtistEdit : undefined}
+                title={isOwner ? 'Click to edit artist' : undefined}
+              >
+                {track.artist || (isOwner ? 'Add Artist' : '')}
+              </p>
             )}
 
             <p className="text-surface-400">
@@ -376,24 +436,6 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
                   </svg>
                   Add to Playlist
                 </button>
-                <button
-                  onClick={() => setShowShareModal(true)}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-surface-800 px-3 py-1.5 text-xs font-medium text-surface-200 hover:bg-surface-700 hover:text-white transition-colors"
-                >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-                  </svg>
-                  Share
-                </button>
-                <button
-                  onClick={handleDelete}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-red-600/10 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-600/20 hover:text-red-300 transition-colors"
-                >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                  Delete
-                </button>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -406,6 +448,21 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
           </div>
         </div>
 
+        {/* Share Button (moved) */}
+        {isOwner && (
+          <div className="mb-6 flex">
+            <button
+              onClick={() => setShowShareModal(true)}
+              className="inline-flex items-center gap-2 rounded-md bg-surface-800 px-4 py-2 text-sm font-medium text-surface-200 hover:bg-surface-700 hover:text-white transition-colors"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+              </svg>
+              Share Track
+            </button>
+          </div>
+        )}
+
         {/* Reactions */}
         <div className="mb-6 border-t border-surface-800 pt-6">
           <h3 className="mb-3 text-sm font-medium text-surface-400">React to this track</h3>
@@ -416,10 +473,10 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
         <div className="border-t border-surface-800 pt-6">
           {/* Tab Navigation */}
           {isOwner ? (
-            <div className="mb-6 flex gap-1 border-b border-surface-800">
+            <div className="mb-6 flex gap-1 border-b border-surface-800 overflow-x-auto">
               <button
                 onClick={() => setActiveTab('comments')}
-                className={`px-4 py-2.5 text-sm font-semibold transition-all ${
+                className={`px-4 py-2.5 text-sm font-semibold transition-all whitespace-nowrap ${
                   activeTab === 'comments'
                     ? 'border-b-2 border-primary-500 text-primary-400 -mb-px'
                     : 'text-surface-400 hover:text-surface-200 border-b-2 border-transparent'
@@ -429,7 +486,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
               </button>
               <button
                 onClick={() => setActiveTab('versions')}
-                className={`px-4 py-2.5 text-sm font-semibold transition-all ${
+                className={`px-4 py-2.5 text-sm font-semibold transition-all whitespace-nowrap ${
                   activeTab === 'versions'
                     ? 'border-b-2 border-primary-500 text-primary-400 -mb-px'
                     : 'text-surface-400 hover:text-surface-200 border-b-2 border-transparent'
@@ -439,13 +496,23 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
               </button>
               <button
                 onClick={() => setActiveTab('attachments')}
-                className={`px-4 py-2.5 text-sm font-semibold transition-all ${
+                className={`px-4 py-2.5 text-sm font-semibold transition-all whitespace-nowrap ${
                   activeTab === 'attachments'
                     ? 'border-b-2 border-primary-500 text-primary-400 -mb-px'
                     : 'text-surface-400 hover:text-surface-200 border-b-2 border-transparent'
                 }`}
               >
                 Attachments ({attachments.length})
+              </button>
+              <button
+                onClick={() => setActiveTab('delete' as any)}
+                className={`px-4 py-2.5 text-sm font-semibold transition-all whitespace-nowrap ${
+                  activeTab === ('delete' as any)
+                    ? 'border-b-2 border-red-500 text-red-400 -mb-px'
+                    : 'text-surface-400 hover:text-red-400 border-b-2 border-transparent'
+                }`}
+              >
+                Delete
               </button>
             </div>
           ) : (
@@ -519,6 +586,24 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
               attachments={attachments}
               onAttachmentsChange={setAttachments}
             />
+          )}
+
+          {activeTab === ('delete' as any) && isOwner && (
+            <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-6">
+              <h3 className="mb-2 text-lg font-medium text-red-400">Danger Zone</h3>
+              <p className="mb-4 text-sm text-surface-300">
+                Deleting this track will permanently remove all versions, attachments, and comments associated with it. This action cannot be undone.
+              </p>
+              <button
+                onClick={handleDelete}
+                className="inline-flex items-center gap-2 rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 transition-colors"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                Delete Track
+              </button>
+            </div>
           )}
         </div>
       </div>

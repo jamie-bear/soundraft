@@ -157,16 +157,21 @@ export default function SharedPlaylistPage() {
                 )}
               </div>
 
-              {/* Playlist Info */}
-              <div className="flex-1 min-w-0">
-                <p className="mb-1 text-xs font-medium uppercase text-surface-400">
-                  {playlist.type}
-                </p>
-                <h1 className="mb-2 text-2xl font-bold text-white truncate">{playlist.title}</h1>
-                <p className="text-surface-400">
-                  {tracks.length} {tracks.length === 1 ? 'track' : 'tracks'}
-                  {totalDuration > 0 ? ` - ${formatDuration(totalDuration)}` : ''}
-                </p>
+                {/* Playlist Info */}
+                <div className="flex-1 min-w-0">
+                  <p className="mb-1 text-xs font-medium uppercase text-surface-400">
+                    {playlist.type}
+                  </p>
+                  <h1 className="mb-2 text-2xl font-bold text-white line-clamp-2">{playlist.title}</h1>
+                  {playlist.artist && (
+                    <p className="mb-2 text-lg text-surface-300">
+                      {playlist.artist}
+                    </p>
+                  )}
+                  <p className="text-surface-400">
+                    {tracks.length} {tracks.length === 1 ? 'track' : 'tracks'}
+                    {totalDuration > 0 ? ` - ${formatDuration(totalDuration)}` : ''}
+                  </p>
 
                 {/* Play All Button */}
                 {tracks.length > 0 && tracks[0].current_version_id && (
@@ -261,6 +266,9 @@ export default function SharedPlaylistPage() {
                         {/* Track info */}
                         <div className="min-w-0 flex-1">
                           <p className="truncate font-medium text-white">{track.title}</p>
+                          {track.artist && (
+                            <p className="truncate text-sm text-surface-400">{track.artist}</p>
+                          )}
                         </div>
 
                         {/* Duration */}

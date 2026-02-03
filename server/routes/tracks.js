@@ -1,5 +1,6 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
+const mm = require('music-metadata');
 const { requireAuth, requireAuthWithQuery, optionalAuth, checkShareAccess } = require('../middleware/auth');
 
 const router = express.Router();
@@ -35,7 +36,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
      */
     router.post('/', requireAuth, async (req, res) => {
         try {
-            const { title, status = 'WIP', type = 'RELEASE' } = req.body;
+            const { title, artist, status = 'WIP', type = 'RELEASE' } = req.body;
 
             if (!title) {
                 return res.status(400).json({ error: 'Title is required' });
@@ -45,10 +46,10 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             const shareToken = uuidv4().replace(/-/g, '');
 
             const result = await pool.query(`
-                INSERT INTO tracks (owner_id, title, status, type, share_token)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO tracks (owner_id, title, artist, status, type, share_token)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING *
-            `, [req.user.id, title, status, type, shareToken]);
+            `, [req.user.id, title, artist, status, type, shareToken]);
 
             res.status(201).json({ track: result.rows[0] });
         } catch (err) {
@@ -105,9 +106,31 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             // For share token lookups, the token in URL serves as validation
             const hasValidToken = !isUUID || (token && token === track.share_token);
             const isPublic = track.release_status === 'PUBLIC';
+            const isPrivate = track.release_status === 'PRIVATE';
 
-            if (!isOwner && !hasValidToken && !isPublic) {
-                return res.status(403).json({ error: 'Access denied' });
+            // Access Logic:
+            // 1. Owner always has access
+            // 2. Public tracks: Accessible if hasValidToken (or if we allow public browsing without token, but here token is key for shared links)
+            //    Actually, if isPublic, we might allow access even without token if we implement a public feed, but for /:id endpoint:
+            //    If accessed via UUID, isPublic should probably allow it? 
+            //    The current logic `!isUUID || (token ...)` implies UUID access requires token unless isOwner?
+            //    Wait, `hasValidToken` is true if `!isUUID` (accessed via /share/token route logic in frontend calling API with token as ID?).
+            //    Actually API `/:id` handles both.
+            
+            // New Requirement: Private tracks require login.
+            
+            if (!isOwner) {
+                // If accessed via UUID and no token provided, deny (unless public? logic below handles it)
+                
+                // If Private, strictly require authentication
+                if (isPrivate && !req.user) {
+                    return res.status(401).json({ error: 'Authentication required' });
+                }
+
+                // General access check
+                if (!hasValidToken && !isPublic) {
+                    return res.status(403).json({ error: 'Access denied' });
+                }
             }
 
             // Remove sensitive fields for non-owners
@@ -129,7 +152,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
     router.put('/:id', requireAuth, async (req, res) => {
         try {
             const { id } = req.params;
-            const { title, status, type, release_status, comment_access } = req.body;
+            const { title, artist, status, type, release_status, comment_access } = req.body;
 
             // Verify ownership
             const existing = await pool.query(
@@ -148,14 +171,15 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             const result = await pool.query(`
                 UPDATE tracks 
                 SET title = COALESCE($1, title),
-                    status = COALESCE($2, status),
-                    type = COALESCE($3, type),
-                    release_status = COALESCE($4, release_status),
-                    comment_access = COALESCE($5, comment_access),
+                    artist = COALESCE($2, artist),
+                    status = COALESCE($3, status),
+                    type = COALESCE($4, type),
+                    release_status = COALESCE($5, release_status),
+                    comment_access = COALESCE($6, comment_access),
                     updated_at = CURRENT_TIMESTAMP
-                WHERE id = $6
+                WHERE id = $7
                 RETURNING *
-            `, [title, status, type, release_status, comment_access, id]);
+            `, [title, artist, status, type, release_status, comment_access, id]);
 
             res.json({ track: result.rows[0] });
         } catch (err) {
@@ -299,9 +323,16 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 { 'Content-Type': req.file.mimetype }
             );
 
-            // TODO: Extract duration using ffprobe
-            // For now, default to 0
-            const durationSeconds = 0;
+            // Extract duration using music-metadata
+            let durationSeconds = 0;
+            try {
+                const metadata = await mm.parseBuffer(req.file.buffer, req.file.mimetype);
+                if (metadata.format.duration) {
+                    durationSeconds = Math.round(metadata.format.duration);
+                }
+            } catch (err) {
+                console.error('Failed to parse audio duration:', err.message);
+            }
 
             // Create version record
             const result = await pool.query(`

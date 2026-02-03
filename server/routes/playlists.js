@@ -57,7 +57,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
      */
     router.post('/', requireAuth, async (req, res) => {
         try {
-            const { title, type = 'PLAYLIST' } = req.body;
+            const { title, artist, type = 'PLAYLIST' } = req.body;
 
             if (!title) {
                 return res.status(400).json({ error: 'Title is required' });
@@ -66,10 +66,10 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             const shareToken = uuidv4().replace(/-/g, '');
 
             const result = await pool.query(`
-                INSERT INTO playlists (owner_id, title, type, share_token)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO playlists (owner_id, title, artist, type, share_token)
+                VALUES ($1, $2, $3, $4, $5)
                 RETURNING *
-            `, [req.user.id, title, type, shareToken]);
+            `, [req.user.id, title, artist, type, shareToken]);
 
             res.status(201).json({ playlist: result.rows[0] });
         } catch (err) {
@@ -116,14 +116,22 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             // For share token lookups, the token in URL serves as validation
             const hasValidToken = !isUUID || (token && token === playlist.share_token);
             const isPublic = playlist.is_public;
+            
+            // New Requirement: Private playlists require login.
+            if (!isOwner) {
+                // If Private (not public), strictly require authentication
+                if (!isPublic && !req.user) {
+                    return res.status(401).json({ error: 'Authentication required' });
+                }
 
-            if (!isOwner && !hasValidToken && !isPublic) {
-                return res.status(403).json({ error: 'Access denied' });
+                if (!hasValidToken && !isPublic) {
+                    return res.status(403).json({ error: 'Access denied' });
+                }
             }
 
             // Get tracks with order (use playlist.id, not the param id)
             const tracksResult = await pool.query(`
-                SELECT t.id, t.title, t.status, t.type, t.cover_art_path,
+                SELECT t.id, t.title, t.artist, t.status, t.type, t.cover_art_path,
                        t.current_version_id,
                        tv.duration_seconds,
                        pt.sort_order
@@ -175,12 +183,13 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             const result = await pool.query(`
                 UPDATE playlists 
                 SET title = COALESCE($1, title),
-                    type = COALESCE($2, type),
-                    is_public = COALESCE($3, is_public),
-                    comment_access = COALESCE($4, comment_access)
-                WHERE id = $5
+                    artist = COALESCE($2, artist),
+                    type = COALESCE($3, type),
+                    is_public = COALESCE($4, is_public),
+                    comment_access = COALESCE($5, comment_access)
+                WHERE id = $6
                 RETURNING *
-            `, [title, type, is_public, comment_access, id]);
+            `, [title, artist, type, is_public, comment_access, id]);
 
             res.json({ playlist: result.rows[0] });
         } catch (err) {
