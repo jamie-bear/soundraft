@@ -106,8 +106,7 @@ export const tracksApi = {
 
   get: (id: string, token?: string) =>
     request<{ track: Track; isOwner: boolean }>(
-      `/tracks/${id}${token ? `?token=${token}` : ''}`,
-      { auth: !token }
+      `/tracks/${id}${token ? `?token=${token}` : ''}`
     ),
 
   create: (data: { title: string; status?: string; type?: string }) =>
@@ -128,24 +127,47 @@ export const tracksApi = {
   getVersions: (id: string) =>
     request<{ versions: TrackVersion[] }>(`/tracks/${id}/versions`),
 
-  uploadVersion: async (id: string, file: File) => {
+  uploadVersion: async (
+    id: string,
+    file: File,
+    onProgress?: (progress: number) => void
+  ): Promise<{ version: TrackVersion }> => {
     const formData = new FormData()
     formData.append('audio', file)
 
     const token = localStorage.getItem('token')
-    const response = await fetch(`${API_URL}/tracks/${id}/versions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: formData,
-    })
 
-    const data = await response.json()
-    if (!response.ok) {
-      throw new ApiError(data.error || 'Upload failed', response.status)
-    }
-    return data as { version: TrackVersion }
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable && onProgress) {
+          const progress = Math.round((event.loaded / event.total) * 100)
+          onProgress(progress)
+        }
+      })
+
+      xhr.addEventListener('load', () => {
+        try {
+          const data = JSON.parse(xhr.responseText)
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(data as { version: TrackVersion })
+          } else {
+            reject(new ApiError(data.error || 'Upload failed', xhr.status))
+          }
+        } catch {
+          reject(new ApiError('Upload failed', xhr.status))
+        }
+      })
+
+      xhr.addEventListener('error', () => {
+        reject(new ApiError('Upload failed', 0))
+      })
+
+      xhr.open('POST', `${API_URL}/tracks/${id}/versions`)
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+      xhr.send(formData)
+    })
   },
 
   share: (id: string, makePublic: boolean) =>
@@ -213,8 +235,7 @@ export const playlistsApi = {
 
   get: (id: string, token?: string) =>
     request<{ playlist: Playlist; tracks: Track[]; isOwner: boolean }>(
-      `/playlists/${id}${token ? `?token=${token}` : ''}`,
-      { auth: !token }
+      `/playlists/${id}${token ? `?token=${token}` : ''}`
     ),
 
   create: (data: { title: string; type?: string }) =>
@@ -289,8 +310,7 @@ export const commentsApi = {
   // Track comments
   listTrackComments: (trackId: string, token?: string) =>
     request<{ comments: Comment[]; canPost: boolean; commentsHidden?: boolean }>(
-      `/comments/track/${trackId}${token ? `?token=${token}` : ''}`,
-      { auth: !token }
+      `/comments/track/${trackId}${token ? `?token=${token}` : ''}`
     ),
 
   createTrackComment: (trackId: string, body: string, audioTimestamp?: number, token?: string) =>
@@ -303,8 +323,7 @@ export const commentsApi = {
   // Playlist comments
   listPlaylistComments: (playlistId: string, token?: string) =>
     request<{ comments: Comment[]; canPost: boolean; commentsHidden?: boolean }>(
-      `/comments/playlist/${playlistId}${token ? `?token=${token}` : ''}`,
-      { auth: !token }
+      `/comments/playlist/${playlistId}${token ? `?token=${token}` : ''}`
     ),
 
   createPlaylistComment: (playlistId: string, body: string, token?: string) =>
@@ -453,6 +472,7 @@ export interface Track {
   id: string
   owner_id: string
   title: string
+  artist?: string
   status: 'POC' | 'DRAFT' | 'WIP' | 'FINAL'
   type: 'RELEASE' | 'RADIO_MIX' | 'ALT_MIX'
   release_status: 'PRIVATE' | 'PUBLIC'
@@ -482,6 +502,7 @@ export interface Playlist {
   id: string
   owner_id: string
   title: string
+  artist?: string
   type: 'ALBUM' | 'EP' | 'SINGLE' | 'PLAYLIST'
   cover_art_path?: string
   is_public: boolean
