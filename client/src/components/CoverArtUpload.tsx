@@ -12,7 +12,7 @@ interface CoverArtUploadProps {
 const sizeClasses = {
   sm: 'h-24 w-24',
   md: 'h-40 w-40',
-  lg: 'h-48 w-48',
+  lg: 'h-60 w-60',
 }
 
 export default function CoverArtUpload({
@@ -153,6 +153,22 @@ export default function CoverArtUpload({
                 {currentCoverUrl ? 'Change' : 'Upload'}
               </span>
             </div>
+
+            {/* Delete button (inside overlay) */}
+            {currentCoverUrl && onDelete && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleDelete()
+                }}
+                className="absolute top-2 right-2 p-1.5 rounded-full bg-red-600/80 text-white hover:bg-red-600 transition-colors"
+                title="Remove cover"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
           </div>
         )}
 
@@ -165,25 +181,6 @@ export default function CoverArtUpload({
           disabled={disabled || uploading}
         />
       </div>
-
-      {/* File info */}
-      <p className="text-xs text-surface-500 text-center">
-        Max 20MB. Square images work best.
-      </p>
-
-      {/* Delete button */}
-      {currentCoverUrl && onDelete && !disabled && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            handleDelete()
-          }}
-          disabled={uploading}
-          className="w-full rounded-lg bg-surface-800 px-2 py-1.5 text-xs font-medium text-surface-400 hover:bg-surface-700 hover:text-red-400 transition-colors disabled:opacity-50"
-        >
-          Remove Cover
-        </button>
-      )}
 
       {/* Error message */}
       {error && (
