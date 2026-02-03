@@ -146,15 +146,15 @@ async function seedExampleContent(adminUserId) {
 
     // Create version
     const versionResult = await pool.query(
-        'INSERT INTO track_versions (track_id, version_number, storage_key, file_size, duration_seconds) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-        [trackId, 1, trackStorageKey, trackBuffer.length, durationSeconds]
+        'INSERT INTO track_versions (track_id, version_number, filename, storage_key, mime_type, size_bytes, duration_seconds) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
+        [trackId, 1, trackFile, trackStorageKey, 'audio/wav', trackBuffer.length, durationSeconds]
     );
     const versionId = versionResult.rows[0].id;
 
     // Set as current version
     await pool.query(
-        'UPDATE tracks SET current_version_id = $1, current_version_number = 1, duration_seconds = $2 WHERE id = $3',
-        [versionId, durationSeconds, trackId]
+        'UPDATE tracks SET current_version_id = $1 WHERE id = $2',
+        [versionId, trackId]
     );
     console.log(`Uploaded track audio file`);
 
@@ -170,7 +170,7 @@ async function seedExampleContent(adminUserId) {
 
         await pool.query(
             'UPDATE tracks SET cover_art_path = $1 WHERE id = $2',
-            [`/api/assets/${coverStorageKey}`, trackId]
+            [`/api/storage/${coverStorageKey}`, trackId]
         );
         console.log(`Uploaded track cover art`);
     }
@@ -202,7 +202,7 @@ async function seedExampleContent(adminUserId) {
 
         await pool.query(
             'UPDATE playlists SET cover_art_path = $1 WHERE id = $2',
-            [`/api/assets/${playlistCoverStorageKey}`, playlistId]
+            [`/api/storage/${playlistCoverStorageKey}`, playlistId]
         );
         console.log(`Uploaded playlist cover art`);
     }
