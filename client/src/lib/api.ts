@@ -127,24 +127,47 @@ export const tracksApi = {
   getVersions: (id: string) =>
     request<{ versions: TrackVersion[] }>(`/tracks/${id}/versions`),
 
-  uploadVersion: async (id: string, file: File) => {
+  uploadVersion: async (
+    id: string,
+    file: File,
+    onProgress?: (progress: number) => void
+  ): Promise<{ version: TrackVersion }> => {
     const formData = new FormData()
     formData.append('audio', file)
 
     const token = localStorage.getItem('token')
-    const response = await fetch(`${API_URL}/tracks/${id}/versions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: formData,
-    })
 
-    const data = await response.json()
-    if (!response.ok) {
-      throw new ApiError(data.error || 'Upload failed', response.status)
-    }
-    return data as { version: TrackVersion }
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable && onProgress) {
+          const progress = Math.round((event.loaded / event.total) * 100)
+          onProgress(progress)
+        }
+      })
+
+      xhr.addEventListener('load', () => {
+        try {
+          const data = JSON.parse(xhr.responseText)
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(data as { version: TrackVersion })
+          } else {
+            reject(new ApiError(data.error || 'Upload failed', xhr.status))
+          }
+        } catch {
+          reject(new ApiError('Upload failed', xhr.status))
+        }
+      })
+
+      xhr.addEventListener('error', () => {
+        reject(new ApiError('Upload failed', 0))
+      })
+
+      xhr.open('POST', `${API_URL}/tracks/${id}/versions`)
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+      xhr.send(formData)
+    })
   },
 
   share: (id: string, makePublic: boolean) =>

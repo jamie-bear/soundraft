@@ -49,6 +49,8 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
   const titleInputRef = useRef<HTMLInputElement>(null)
   const artistInputRef = useRef<HTMLInputElement>(null)
 
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null)
+
   const trackId = shared ? undefined : id
   const shareToken = shared ? token : undefined
 
@@ -112,10 +114,19 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
     if (!file || !track) return
 
     try {
-      await tracksApi.uploadVersion(track.id, file)
+      setUploadProgress(0)
+      await tracksApi.uploadVersion(track.id, file, (progress) => {
+        setUploadProgress(progress)
+      })
+      setUploadProgress(null)
       loadTrack() // Reload to get new version
     } catch (err) {
+      setUploadProgress(null)
       setError(err instanceof Error ? err.message : 'Upload failed')
+    }
+    // Reset file input so the same file can be re-selected
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
     }
   }
 
@@ -418,15 +429,30 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
             {/* Owner Action Buttons */}
             {isOwner && (
               <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-surface-800 px-3 py-1.5 text-xs font-medium text-surface-200 hover:bg-surface-700 hover:text-white transition-colors"
-                >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                  </svg>
-                  Upload New Version
-                </button>
+                {uploadProgress !== null ? (
+                  // Upload progress indicator
+                  <div className="inline-flex items-center gap-2 rounded-md bg-surface-800 px-3 py-1.5 min-w-[160px]">
+                    <div className="flex-1 h-1.5 bg-surface-700 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-primary-500 rounded-full transition-all duration-150"
+                        style={{ width: `${uploadProgress}%` }}
+                      />
+                    </div>
+                    <span className="text-xs font-medium text-surface-300 tabular-nums">
+                      {uploadProgress}%
+                    </span>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-surface-800 px-3 py-1.5 text-xs font-medium text-surface-200 hover:bg-surface-700 hover:text-white transition-colors"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                    </svg>
+                    Upload New Version
+                  </button>
+                )}
                 <button
                   onClick={() => setShowAddToPlaylist(true)}
                   className="inline-flex items-center gap-1.5 rounded-md bg-surface-800 px-3 py-1.5 text-xs font-medium text-surface-200 hover:bg-surface-700 hover:text-white transition-colors"
