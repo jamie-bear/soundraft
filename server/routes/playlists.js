@@ -164,7 +164,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
     router.put('/:id', requireAuth, async (req, res) => {
         try {
             const { id } = req.params;
-            const { title, type, is_public, comment_access } = req.body;
+            const { title, artist, type, is_public, comment_access } = req.body;
 
             // Verify ownership
             const existing = await pool.query(

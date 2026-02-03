@@ -106,8 +106,7 @@ export const tracksApi = {
 
   get: (id: string, token?: string) =>
     request<{ track: Track; isOwner: boolean }>(
-      `/tracks/${id}${token ? `?token=${token}` : ''}`,
-      { auth: !token }
+      `/tracks/${id}${token ? `?token=${token}` : ''}`
     ),
 
   create: (data: { title: string; status?: string; type?: string }) =>
@@ -213,8 +212,7 @@ export const playlistsApi = {
 
   get: (id: string, token?: string) =>
     request<{ playlist: Playlist; tracks: Track[]; isOwner: boolean }>(
-      `/playlists/${id}${token ? `?token=${token}` : ''}`,
-      { auth: !token }
+      `/playlists/${id}${token ? `?token=${token}` : ''}`
     ),
 
   create: (data: { title: string; type?: string }) =>
@@ -289,8 +287,7 @@ export const commentsApi = {
   // Track comments
   listTrackComments: (trackId: string, token?: string) =>
     request<{ comments: Comment[]; canPost: boolean; commentsHidden?: boolean }>(
-      `/comments/track/${trackId}${token ? `?token=${token}` : ''}`,
-      { auth: !token }
+      `/comments/track/${trackId}${token ? `?token=${token}` : ''}`
     ),
 
   createTrackComment: (trackId: string, body: string, audioTimestamp?: number, token?: string) =>
@@ -303,8 +300,7 @@ export const commentsApi = {
   // Playlist comments
   listPlaylistComments: (playlistId: string, token?: string) =>
     request<{ comments: Comment[]; canPost: boolean; commentsHidden?: boolean }>(
-      `/comments/playlist/${playlistId}${token ? `?token=${token}` : ''}`,
-      { auth: !token }
+      `/comments/playlist/${playlistId}${token ? `?token=${token}` : ''}`
     ),
 
   createPlaylistComment: (playlistId: string, body: string, token?: string) =>
