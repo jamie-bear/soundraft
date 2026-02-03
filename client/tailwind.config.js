@@ -7,31 +7,39 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Custom color palette for music app
+        // SoundRaft brand color palette
         primary: {
-          50: '#f0f9ff',
-          100: '#e0f2fe',
-          200: '#bae6fd',
-          300: '#7dd3fc',
-          400: '#38bdf8',
-          500: '#0ea5e9',
-          600: '#0284c7',
-          700: '#0369a1',
-          800: '#075985',
-          900: '#0c4a6e',
+          50: '#f0f7ff',   // alice-blue tint
+          100: '#e0efff',
+          200: '#b8daff',
+          300: '#85c1ff',
+          400: '#4da3ff',
+          500: '#1f83ff',  // azure-blue (main brand color)
+          600: '#1a6fd9',
+          700: '#155bb3',
+          800: '#124991',  // steel-azure
+          900: '#0d3a73',
+          950: '#082550',
         },
         surface: {
-          50: '#fafafa',
-          100: '#f4f4f5',
-          200: '#e4e4e7',
-          300: '#d4d4d8',
-          400: '#a1a1aa',
-          500: '#71717a',
-          600: '#52525b',
-          700: '#3f3f46',
-          800: '#27272a',
-          900: '#18181b',
-          950: '#09090b',
+          50: '#f0f7ff',   // alice-blue
+          100: '#e1ecf7',
+          200: '#c3d4e8',
+          300: '#9eb8d4',
+          400: '#7a9bc0',
+          500: '#5a7fa8',
+          600: '#3d5f85',
+          700: '#1e3a5c',
+          800: '#0f2540',
+          900: '#081526',
+          950: '#020913',  // ink-black
+        },
+        // Accent color for highlights, warnings, notifications
+        accent: {
+          red: '#ff4242',     // strawberry-red
+          redLight: '#ffe8e8', // soft-blush
+          amber: '#ff9b1f',   // amber-glow
+          amberLight: '#ffac4a', // amber-glow-2
         }
       }
     },

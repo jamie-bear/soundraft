@@ -24,11 +24,16 @@ export default function AddTrackModal({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
+  const [showNewTrack, setShowNewTrack] = useState(false)
+  const [newTrackTitle, setNewTrackTitle] = useState('')
+  const [creating, setCreating] = useState(false)
 
   useEffect(() => {
     if (isOpen) {
       loadTracks()
       setSelectedTrackIds(new Set())
+      setShowNewTrack(false)
+      setNewTrackTitle('')
     }
   }, [isOpen])
 
@@ -74,6 +79,27 @@ export default function AddTrackModal({
       setError(err instanceof Error ? err.message : 'Failed to add tracks')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleCreateTrack = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newTrackTitle.trim()) return
+
+    setCreating(true)
+    setError('')
+
+    try {
+      const { track } = await tracksApi.create({ title: newTrackTitle.trim() })
+      await playlistsApi.addTrack(playlistId, track.id)
+      onTracksAdded()
+      setNewTrackTitle('')
+      setShowNewTrack(false)
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create track')
+    } finally {
+      setCreating(false)
     }
   }
 
@@ -127,6 +153,47 @@ export default function AddTrackModal({
             <div className="mb-4 rounded-lg bg-red-500/10 border border-red-500/20 p-3 text-sm text-red-400">
               {error}
             </div>
+          )}
+
+          {/* Create new track option */}
+          {showNewTrack ? (
+            <form onSubmit={handleCreateTrack} className="mb-4 flex gap-2">
+              <input
+                type="text"
+                value={newTrackTitle}
+                onChange={(e) => setNewTrackTitle(e.target.value)}
+                placeholder="New track title..."
+                className="flex-1 rounded-lg border border-surface-700 bg-surface-800 px-3 py-2 text-sm text-white placeholder-surface-500 focus:border-primary-500 focus:outline-none"
+                autoFocus
+              />
+              <button
+                type="submit"
+                disabled={!newTrackTitle.trim() || creating}
+                className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50 transition-colors"
+              >
+                {creating ? '...' : 'Create'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNewTrack(false)
+                  setNewTrackTitle('')
+                }}
+                className="rounded-lg bg-surface-800 px-3 py-2 text-sm text-surface-400 hover:bg-surface-700 transition-colors"
+              >
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <button
+              onClick={() => setShowNewTrack(true)}
+              className="mb-4 flex w-full items-center gap-2 rounded-lg border border-dashed border-surface-700 p-3 text-sm text-surface-400 hover:border-surface-600 hover:text-surface-300 transition-colors"
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Create New Track
+            </button>
           )}
 
           {loading ? (
