@@ -283,11 +283,11 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
   return (
     <div className="mx-auto max-w-3xl">
       {/* Track Card */}
-      <div className="rounded-2xl bg-surface-900 p-6">
+      <div className="rounded-2xl bg-surface-900 p-4 sm:p-6">
         {/* Track Header */}
-        <div className="mb-6 flex gap-6">
+        <div className="mb-6 flex flex-col sm:flex-row gap-6">
           {/* Cover Art */}
-          <div className="relative h-60 w-60 shrink-0 rounded-xl bg-surface-800 overflow-hidden">
+          <div className="relative mx-auto sm:mx-0 h-48 w-48 sm:h-60 sm:w-60 shrink-0 rounded-xl bg-surface-800 overflow-hidden">
             {isOwner ? (
               <CoverArtUpload
                 currentCoverUrl={track.cover_art_path}
@@ -331,8 +331,8 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
           </div>
 
           {/* Track Info */}
-          <div className="flex-1 min-w-0">
-            <div className="mb-2 flex items-center gap-2">
+          <div className="flex-1 min-w-0 text-center sm:text-left">
+            <div className="mb-2 flex items-center justify-center sm:justify-start gap-2">
               {isOwner ? (
                 <select
                   value={track.status}
@@ -406,7 +406,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
             {track.current_version_id && (
               <button
                 onClick={handlePlay}
-                className="mt-4 flex items-center gap-2 rounded-full bg-primary-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
+                className="mt-4 mx-auto sm:mx-0 flex items-center gap-2 rounded-full bg-primary-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
               >
                 {isCurrentlyPlaying ? (
                   <>
@@ -428,7 +428,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
 
             {/* Owner Action Buttons */}
             {isOwner && (
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-3 flex flex-wrap justify-center sm:justify-start gap-2">
                 {uploadProgress !== null ? (
                   // Upload progress indicator
                   <div className="inline-flex items-center gap-2 rounded-md bg-surface-800 px-3 py-1.5 min-w-[160px]">

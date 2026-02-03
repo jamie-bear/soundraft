@@ -189,13 +189,29 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
     if (isCurrentTrack) {
       togglePlay()
     } else {
-      playTrack({
-        id: track.id,
-        title: track.title,
-        versionId: track.current_version_id,
-        version: 1,
-        duration: track.duration_seconds || 0,
-      })
+      // Build queue from all playable tracks in the playlist
+      const queue = tracks
+        .filter((t) => t.current_version_id)
+        .map((t) => ({
+          id: t.id,
+          title: t.title,
+          versionId: t.current_version_id!,
+          version: 1,
+          duration: t.duration_seconds || 0,
+          coverArt: t.cover_art_path ? getAssetUrl(t.cover_art_path) : undefined,
+        }))
+
+      playTrack(
+        {
+          id: track.id,
+          title: track.title,
+          versionId: track.current_version_id,
+          version: 1,
+          duration: track.duration_seconds || 0,
+          coverArt: track.cover_art_path ? getAssetUrl(track.cover_art_path) : undefined,
+        },
+        queue
+      )
     }
   }
 
@@ -361,21 +377,23 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
   return (
     <div className="mx-auto max-w-3xl">
       {/* Playlist Header */}
-      <div className="mb-8 flex gap-6">
+      <div className="mb-8 flex flex-col sm:flex-row gap-6">
         {isOwner ? (
-          <CoverArtUpload
-            currentCoverUrl={playlist.cover_art_path}
-            onUpload={handleCoverUpload}
-            onDelete={playlist.cover_art_path ? handleCoverDelete : undefined}
-            size="lg"
-          />
+          <div className="mx-auto sm:mx-0">
+            <CoverArtUpload
+              currentCoverUrl={playlist.cover_art_path}
+              onUpload={handleCoverUpload}
+              onDelete={playlist.cover_art_path ? handleCoverDelete : undefined}
+              size="lg"
+            />
+          </div>
         ) : (
-          <div className="h-60 w-60 shrink-0 rounded-xl bg-surface-800 overflow-hidden">
+          <div className="mx-auto sm:mx-0 h-48 w-48 sm:h-60 sm:w-60 shrink-0 rounded-xl bg-surface-800 overflow-hidden">
             {playlist.cover_art_path ? (
               <img src={getAssetUrl(playlist.cover_art_path)} alt="" className="h-full w-full object-cover" />
             ) : (
               <div className="flex h-full w-full items-center justify-center">
-                <svg className="h-20 w-20 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="h-16 w-16 sm:h-20 sm:w-20 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                 </svg>
               </div>
@@ -383,7 +401,7 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
           </div>
         )}
 
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 text-center sm:text-left">
           <p className="mb-1 text-sm font-medium uppercase text-surface-400">{playlist.type}</p>
           
           {/* Editable Title */}
@@ -432,7 +450,7 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
           <p className="text-surface-400">{tracks.length} tracks</p>
 
           {isOwner && (
-            <div className="mt-4 flex flex-wrap gap-2">
+            <div className="mt-4 flex flex-wrap justify-center sm:justify-start gap-2">
               <button
                 onClick={() => setShowAddTrack(true)}
                 className="flex items-center gap-2 rounded-lg bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
