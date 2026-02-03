@@ -453,6 +453,7 @@ export interface Track {
   id: string
   owner_id: string
   title: string
+  artist?: string
   status: 'POC' | 'DRAFT' | 'WIP' | 'FINAL'
   type: 'RELEASE' | 'RADIO_MIX' | 'ALT_MIX'
   release_status: 'PRIVATE' | 'PUBLIC'
@@ -482,6 +483,7 @@ export interface Playlist {
   id: string
   owner_id: string
   title: string
+  artist?: string
   type: 'ALBUM' | 'EP' | 'SINGLE' | 'PLAYLIST'
   cover_art_path?: string
   is_public: boolean

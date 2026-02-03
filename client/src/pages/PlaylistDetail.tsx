@@ -99,6 +99,11 @@ function SortableTrack({ track, isOwner, onPlay, currentTrackId, isPlaying }: So
         >
           {track.title}
         </Link>
+        {track.artist && (
+          <p className="truncate text-sm text-surface-400">
+            {track.artist}
+          </p>
+        )}
         <p className="text-sm text-surface-400">
           {track.duration_seconds
             ? `${Math.floor(track.duration_seconds / 60)}:${(track.duration_seconds % 60).toString().padStart(2, '0')}`
@@ -131,8 +136,11 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
   const [showShareModal, setShowShareModal] = useState(false)
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [editedTitle, setEditedTitle] = useState('')
+  const [isEditingArtist, setIsEditingArtist] = useState(false)
+  const [editedArtist, setEditedArtist] = useState('')
   
   const titleInputRef = useRef<HTMLInputElement>(null)
+  const artistInputRef = useRef<HTMLInputElement>(null)
 
   const playlistId = shared ? undefined : id
   const shareToken = shared ? token : undefined
@@ -258,6 +266,41 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
     }
   }
 
+  const handleArtistEdit = () => {
+    if (!playlist || !isOwner) return
+    setEditedArtist(playlist.artist || '')
+    setIsEditingArtist(true)
+    setTimeout(() => artistInputRef.current?.focus(), 0)
+  }
+
+  const handleArtistSave = async () => {
+    if (!playlist || !isOwner) {
+      setIsEditingArtist(false)
+      return
+    }
+    
+    if (editedArtist.trim() === (playlist.artist || '')) {
+      setIsEditingArtist(false)
+      return
+    }
+
+    try {
+      const { playlist: updatedPlaylist } = await playlistsApi.update(playlist.id, { artist: editedArtist.trim() })
+      setPlaylist(updatedPlaylist)
+      setIsEditingArtist(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update artist')
+    }
+  }
+
+  const handleArtistKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleArtistSave()
+    } else if (e.key === 'Escape') {
+      setIsEditingArtist(false)
+    }
+  }
+
   const handleDelete = async () => {
     if (!playlist || !isOwner) return
     
@@ -324,15 +367,15 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
             currentCoverUrl={playlist.cover_art_path}
             onUpload={handleCoverUpload}
             onDelete={playlist.cover_art_path ? handleCoverDelete : undefined}
-            size="md"
+            size="lg"
           />
         ) : (
-          <div className="h-40 w-40 shrink-0 rounded-xl bg-surface-800">
+          <div className="h-60 w-60 shrink-0 rounded-xl bg-surface-800 overflow-hidden">
             {playlist.cover_art_path ? (
-              <img src={getAssetUrl(playlist.cover_art_path)} alt="" className="h-full w-full rounded-xl object-cover" />
+              <img src={getAssetUrl(playlist.cover_art_path)} alt="" className="h-full w-full object-cover" />
             ) : (
               <div className="flex h-full w-full items-center justify-center">
-                <svg className="h-12 w-12 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="h-20 w-20 text-surface-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                 </svg>
               </div>
@@ -352,17 +395,40 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
               onChange={(e) => setEditedTitle(e.target.value)}
               onBlur={handleTitleSave}
               onKeyDown={handleTitleKeyDown}
-              className="mb-2 w-full bg-transparent text-3xl font-bold text-white border-b-2 border-primary-500 focus:outline-none"
+              className="mb-1 w-full bg-transparent text-3xl font-bold text-white border-b-2 border-primary-500 focus:outline-none"
             />
           ) : (
             <h1 
-              className={`mb-2 text-3xl font-bold text-white truncate ${isOwner ? 'cursor-pointer hover:text-primary-400 transition-colors' : ''}`}
+              className={`mb-1 text-3xl font-bold text-white line-clamp-2 ${isOwner ? 'cursor-pointer hover:text-primary-400 transition-colors' : ''}`}
               onClick={isOwner ? handleTitleEdit : undefined}
               title={isOwner ? 'Click to edit title' : undefined}
             >
               {playlist.title}
             </h1>
           )}
+
+          {/* Editable Artist */}
+          {isEditingArtist ? (
+            <input
+              ref={artistInputRef}
+              type="text"
+              value={editedArtist}
+              onChange={(e) => setEditedArtist(e.target.value)}
+              onBlur={handleArtistSave}
+              onKeyDown={handleArtistKeyDown}
+              className="mb-2 w-full bg-transparent text-lg text-surface-300 border-b border-surface-600 focus:outline-none focus:border-primary-500"
+              placeholder="Add artist name"
+            />
+          ) : (
+            <p 
+              className={`mb-2 text-lg text-surface-300 ${isOwner ? 'cursor-pointer hover:text-white transition-colors' : ''}`}
+              onClick={isOwner ? handleArtistEdit : undefined}
+              title={isOwner ? 'Click to edit artist' : undefined}
+            >
+              {playlist.artist || (isOwner ? 'Add Artist' : '')}
+            </p>
+          )}
+
           <p className="text-surface-400">{tracks.length} tracks</p>
 
           {isOwner && (
@@ -398,15 +464,6 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
               >
                 Duplicate
               </button>
-              <button
-                onClick={handleDelete}
-                className="flex items-center gap-2 rounded-lg bg-red-600/10 px-3 py-2 text-sm font-medium text-red-400 hover:bg-red-600/20 hover:text-red-300 transition-colors"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-                Delete
-              </button>
             </div>
           )}
         </div>
@@ -434,6 +491,18 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
         >
           Comments ({comments.length})
         </button>
+        {isOwner && (
+          <button
+            onClick={() => setActiveTab('delete' as any)}
+            className={`px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === ('delete' as any)
+                ? 'border-b-2 border-red-500 text-red-400'
+                : 'text-surface-400 hover:text-red-400'
+            }`}
+          >
+            Delete
+          </button>
+        )}
       </div>
 
       {/* Tab Content */}
@@ -498,6 +567,24 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
             onCommentAdded={handleCommentAdded}
             onCommentDeleted={handleCommentDeleted}
           />
+        </div>
+      )}
+
+      {activeTab === ('delete' as any) && isOwner && (
+        <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-6">
+          <h3 className="mb-2 text-lg font-medium text-red-400">Danger Zone</h3>
+          <p className="mb-4 text-sm text-surface-300">
+            Deleting this playlist will permanently remove it. The tracks within the playlist will not be deleted from your library. This action cannot be undone.
+          </p>
+          <button
+            onClick={handleDelete}
+            className="inline-flex items-center gap-2 rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 transition-colors"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+            Delete Playlist
+          </button>
         </div>
       )}
 

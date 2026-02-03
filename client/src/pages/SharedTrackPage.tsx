@@ -192,7 +192,12 @@ export default function SharedTrackPage() {
                   </span>
                 </div>
 
-                <h1 className="mb-2 text-2xl font-bold text-white truncate">{track.title}</h1>
+                <h1 className="mb-2 text-2xl font-bold text-white line-clamp-2">{track.title}</h1>
+                {track.artist && (
+                  <p className="mb-2 text-lg text-surface-300">
+                    {track.artist}
+                  </p>
+                )}
 
                 <p className="text-surface-400">
                   Version {track.current_version_number || 1}

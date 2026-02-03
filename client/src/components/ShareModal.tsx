@@ -224,7 +224,7 @@ export default function ShareModal({
             <p className="mt-1 text-xs text-surface-500">
               {isPublic 
                 ? 'Anyone with the link can access' 
-                : 'Only people with the share link can access'}
+                : 'Only logged-in users can view'}
             </p>
           </div>
 
