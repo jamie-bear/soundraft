@@ -294,7 +294,12 @@ export const commentsApi = {
     request<{ comment: Comment }>(`/comments/track/${trackId}`, {
       method: 'POST',
       body: JSON.stringify({ body, audioTimestamp, token }),
-      auth: !token,
+    }),
+
+  createPlaylistComment: (playlistId: string, body: string, token?: string) =>
+    request<{ comment: Comment }>(`/comments/playlist/${playlistId}`, {
+      method: 'POST',
+      body: JSON.stringify({ body, token }),
     }),
 
   // Playlist comments
