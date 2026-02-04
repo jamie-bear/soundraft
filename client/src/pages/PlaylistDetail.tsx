@@ -58,7 +58,7 @@ function SortableTrack({ track, isOwner, onPlay, currentTrackId, isPlaying }: So
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex items-center gap-4 rounded-lg border p-4 ${
+      className={`flex items-center gap-3 rounded-lg border p-3 ${
         isCurrentTrack
           ? 'border-primary-500/50 bg-primary-500/10'
           : 'border-surface-800 bg-surface-900'
@@ -76,20 +76,42 @@ function SortableTrack({ track, isOwner, onPlay, currentTrackId, isPlaying }: So
         </button>
       )}
 
+      {/* Track number */}
+      <span className="w-5 text-center text-sm text-surface-500 shrink-0">{track.sort_order + 1}</span>
+
+      {/* Cover art with play button overlay */}
       <button
         onClick={() => onPlay(track)}
         disabled={!track.current_version_id}
-        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface-800 text-white hover:bg-surface-700 disabled:opacity-50 transition-colors"
+        className="relative h-12 w-12 shrink-0 rounded-lg overflow-hidden bg-surface-800 group disabled:opacity-50"
       >
-        {isCurrentTrack && isPlaying ? (
-          <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
-          </svg>
+        {track.cover_art_path ? (
+          <img
+            src={getAssetUrl(track.cover_art_path)}
+            alt=""
+            className="h-full w-full object-cover"
+          />
         ) : (
-          <svg className="h-4 w-4 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M8 5v14l11-7z" />
-          </svg>
+          <div className="flex h-full w-full items-center justify-center">
+            <svg className="h-5 w-5 text-surface-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+            </svg>
+          </div>
         )}
+        {/* Play/pause overlay */}
+        <div className={`absolute inset-0 flex items-center justify-center bg-black/50 transition-opacity ${
+          isCurrentTrack ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+        }`}>
+          {isCurrentTrack && isPlaying ? (
+            <svg className="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+            </svg>
+          ) : (
+            <svg className="h-5 w-5 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          )}
+        </div>
       </button>
 
       <div className="min-w-0 flex-1">
@@ -99,19 +121,20 @@ function SortableTrack({ track, isOwner, onPlay, currentTrackId, isPlaying }: So
         >
           {track.title}
         </Link>
-        {track.artist && (
-          <p className="truncate text-sm text-surface-400">
-            {track.artist}
-          </p>
-        )}
-        <p className="text-sm text-surface-400">
-          {track.duration_seconds
-            ? `${Math.floor(track.duration_seconds / 60)}:${(track.duration_seconds % 60).toString().padStart(2, '0')}`
-            : '--:--'}
-        </p>
+        <div className="flex items-center gap-2 text-sm text-surface-400">
+          {track.artist && (
+            <>
+              <span className="truncate">{track.artist}</span>
+              <span>-</span>
+            </>
+          )}
+          <span>
+            {track.duration_seconds
+              ? `${Math.floor(track.duration_seconds / 60)}:${(track.duration_seconds % 60).toString().padStart(2, '0')}`
+              : '--:--'}
+          </span>
+        </div>
       </div>
-
-      <span className="text-sm text-surface-500">{track.sort_order + 1}</span>
     </div>
   )
 }
@@ -402,8 +425,34 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
         )}
 
         <div className="flex-1 min-w-0 text-center sm:text-left">
-          <p className="mb-1 text-sm font-medium uppercase text-surface-400">{playlist.type}</p>
-          
+          {/* Type selector */}
+          <div className="mb-2 flex items-center justify-center sm:justify-start">
+            {isOwner ? (
+              <select
+                value={playlist.type}
+                onChange={async (e) => {
+                  try {
+                    const { playlist: updatedPlaylist } = await playlistsApi.update(playlist.id, { type: e.target.value as Playlist['type'] })
+                    setPlaylist(updatedPlaylist)
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Failed to update type')
+                  }
+                }}
+                className="rounded-full px-2.5 py-0.5 text-xs font-medium uppercase bg-surface-800 text-surface-300 border-0 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                style={{ backgroundImage: 'none' }}
+              >
+                <option value="PLAYLIST" className="bg-surface-800 text-white">Playlist</option>
+                <option value="ALBUM" className="bg-surface-800 text-white">Album</option>
+                <option value="EP" className="bg-surface-800 text-white">EP</option>
+                <option value="SINGLE" className="bg-surface-800 text-white">Single</option>
+              </select>
+            ) : (
+              <span className="rounded-full px-2.5 py-0.5 text-xs font-medium uppercase bg-surface-800 text-surface-300">
+                {playlist.type}
+              </span>
+            )}
+          </div>
+
           {/* Editable Title */}
           {isEditingTitle ? (
             <input
