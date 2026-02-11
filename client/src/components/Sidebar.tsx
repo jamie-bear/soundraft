@@ -7,7 +7,11 @@ const navItems = [
   { path: '/playlists', label: 'Playlists', icon: 'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v6a2 2 0 01-2 2h-2m-6-6v4' },
 ]
 
-export default function Sidebar() {
+interface SidebarProps {
+  onClose?: () => void
+}
+
+export default function Sidebar({ onClose }: SidebarProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const { user, logout } = useAuthStore()
@@ -17,14 +21,29 @@ export default function Sidebar() {
     navigate('/login')
   }
 
+  const handleNavClick = () => {
+    onClose?.()
+  }
+
   return (
-    <aside className="flex w-64 flex-col border-r border-surface-800 bg-surface-900">
+    <aside className="flex h-full w-64 flex-col border-r border-surface-800 bg-surface-900">
       {/* Logo */}
-      <div className="p-4">
-        <Link to="/" className="flex items-center gap-3 px-2">
+      <div className="flex items-center justify-between p-4">
+        <Link to="/" className="flex items-center gap-3 px-2" onClick={handleNavClick}>
           <img src="/soundraft-logo.svg" alt="SoundRaft" className="h-10 w-10" />
           <span className="text-xl font-bold text-white">SoundRaft</span>
         </Link>
+        {/* Close button (mobile only) */}
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-surface-400 hover:bg-surface-800 hover:text-white sm:hidden"
+          >
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Navigation */}
@@ -35,6 +54,7 @@ export default function Sidebar() {
             <Link
               key={item.path}
               to={item.path}
+              onClick={handleNavClick}
               className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                 isActive
                   ? 'bg-primary-600/20 text-primary-400'
@@ -53,6 +73,7 @@ export default function Sidebar() {
         {user?.role === 'ADMIN' && (
           <Link
             to="/admin"
+            onClick={handleNavClick}
             className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-red-400 hover:bg-red-500/10 transition-colors"
           >
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

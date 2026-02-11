@@ -43,27 +43,27 @@ export default function Player() {
           </div>
 
           {/* Play controls (compact) */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
             <button
               onClick={playPrevious}
               disabled={!currentTrack}
-              className={`p-1 ${hasPrevious ? 'text-surface-400 hover:text-white' : 'text-surface-600'}`}
+              className={`flex h-11 w-11 items-center justify-center rounded-full active:bg-surface-700 ${hasPrevious ? 'text-surface-400 hover:text-white' : 'text-surface-600'}`}
             >
-              <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+              <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" />
               </svg>
             </button>
             <button
               onClick={togglePlay}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-surface-900 hover:scale-105 transition-transform"
+              className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-surface-900 hover:scale-105 active:scale-95 transition-transform"
               disabled={!currentTrack}
             >
               {isPlaying ? (
-                <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
                 </svg>
               ) : (
-                <svg className="h-4 w-4 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                <svg className="h-5 w-5 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M8 5v14l11-7z" />
                 </svg>
               )}
@@ -71,9 +71,9 @@ export default function Player() {
             <button
               onClick={playNext}
               disabled={!hasNext}
-              className={`p-1 ${hasNext ? 'text-surface-400 hover:text-white' : 'text-surface-600'}`}
+              className={`flex h-11 w-11 items-center justify-center rounded-full active:bg-surface-700 ${hasNext ? 'text-surface-400 hover:text-white' : 'text-surface-600'}`}
             >
-              <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+              <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
               </svg>
             </button>
