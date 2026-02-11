@@ -343,6 +343,18 @@ app.get('/api/stream/:versionId', async (req, res) => {
     }
 });
 
+// --- Serve Built Frontend (production) ---
+const frontendPath = path.join(__dirname, 'public');
+if (fs.existsSync(frontendPath)) {
+    app.use(express.static(frontendPath));
+    // SPA fallback: serve index.html for any non-API route
+    app.get('*', (req, res) => {
+        if (!req.path.startsWith('/api/')) {
+            res.sendFile(path.join(frontendPath, 'index.html'));
+        }
+    });
+}
+
 // Export for route modules
 module.exports = { app, pool, minioClient, BUCKET_NAME };
 
