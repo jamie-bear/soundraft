@@ -119,7 +119,7 @@ export default function Dashboard() {
     <div>
       {/* Header */}
       <div className="mb-6">
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold text-white">Dashboard</h1>
             <p className="text-surface-400">Manage your tracks and playlists</p>
@@ -127,21 +127,21 @@ export default function Dashboard() {
           <div className="flex gap-2">
             <button
               onClick={() => setShowCreatePlaylist(true)}
-              className="flex items-center gap-2 rounded-lg bg-surface-800 px-4 py-2 text-sm font-medium text-white hover:bg-surface-700 transition-colors"
+              className="flex items-center gap-2 rounded-lg bg-surface-800 px-3 sm:px-4 py-2 text-sm font-medium text-white hover:bg-surface-700 transition-colors"
             >
               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
-              New Playlist
+              <span className="hidden sm:inline">New</span> Playlist
             </button>
             <button
               onClick={() => setShowCreateTrack(true)}
-              className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
+              className="flex items-center gap-2 rounded-lg bg-primary-600 px-3 sm:px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
             >
               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
-              New Track
+              <span className="hidden sm:inline">New</span> Track
             </button>
           </div>
         </div>

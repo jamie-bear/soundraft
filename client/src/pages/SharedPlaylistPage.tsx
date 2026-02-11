@@ -61,14 +61,29 @@ export default function SharedPlaylistPage() {
     if (isCurrentTrack) {
       togglePlay()
     } else {
-      playTrack({
-        id: track.id,
-        title: track.title,
-        versionId: track.current_version_id,
-        version: 1,
-        duration: track.duration_seconds || 0,
-        coverArt: track.cover_art_path ? getAssetUrl(track.cover_art_path) : undefined,
-      })
+      // Build queue from all playable tracks in the playlist
+      const queue = tracks
+        .filter((t) => t.current_version_id)
+        .map((t) => ({
+          id: t.id,
+          title: t.title,
+          versionId: t.current_version_id!,
+          version: 1,
+          duration: t.duration_seconds || 0,
+          coverArt: t.cover_art_path ? getAssetUrl(t.cover_art_path) : undefined,
+        }))
+
+      playTrack(
+        {
+          id: track.id,
+          title: track.title,
+          versionId: track.current_version_id,
+          version: 1,
+          duration: track.duration_seconds || 0,
+          coverArt: track.cover_art_path ? getAssetUrl(track.cover_art_path) : undefined,
+        },
+        queue
+      )
     }
   }
 
@@ -129,9 +144,9 @@ export default function SharedPlaylistPage() {
           {/* Playlist Card */}
           <div className="rounded-2xl bg-surface-900 p-6">
             {/* Playlist Header */}
-            <div className="mb-6 flex gap-6">
+            <div className="mb-6 flex flex-col sm:flex-row gap-6">
               {/* Cover Art */}
-              <div className="h-40 w-40 shrink-0 rounded-xl bg-surface-800 overflow-hidden">
+              <div className="w-full sm:h-40 sm:w-40 aspect-square sm:aspect-auto shrink-0 rounded-xl bg-surface-800 overflow-hidden">
                 {playlist.cover_art_path ? (
                   <img
                     src={getAssetUrl(playlist.cover_art_path)}
@@ -157,27 +172,27 @@ export default function SharedPlaylistPage() {
                 )}
               </div>
 
-                {/* Playlist Info */}
-                <div className="flex-1 min-w-0">
-                  <p className="mb-1 text-xs font-medium uppercase text-surface-400">
-                    {playlist.type}
+              {/* Playlist Info */}
+              <div className="flex-1 min-w-0 text-center sm:text-left">
+                <p className="mb-1 text-xs font-medium uppercase text-surface-400">
+                  {playlist.type}
+                </p>
+                <h1 className="mb-2 text-2xl font-bold text-white line-clamp-2">{playlist.title}</h1>
+                {playlist.artist && (
+                  <p className="mb-2 text-lg text-surface-300">
+                    {playlist.artist}
                   </p>
-                  <h1 className="mb-2 text-2xl font-bold text-white line-clamp-2">{playlist.title}</h1>
-                  {playlist.artist && (
-                    <p className="mb-2 text-lg text-surface-300">
-                      {playlist.artist}
-                    </p>
-                  )}
-                  <p className="text-surface-400">
-                    {tracks.length} {tracks.length === 1 ? 'track' : 'tracks'}
-                    {totalDuration > 0 ? ` - ${formatDuration(totalDuration)}` : ''}
-                  </p>
+                )}
+                <p className="text-surface-400">
+                  {tracks.length} {tracks.length === 1 ? 'track' : 'tracks'}
+                  {totalDuration > 0 ? ` - ${formatDuration(totalDuration)}` : ''}
+                </p>
 
                 {/* Play All Button */}
                 {tracks.length > 0 && tracks[0].current_version_id && (
                   <button
                     onClick={() => handlePlay(tracks[0])}
-                    className="mt-4 flex items-center gap-2 rounded-full bg-primary-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
+                    className="mt-4 mx-auto sm:mx-0 flex items-center gap-2 rounded-full bg-primary-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
                   >
                     <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M8 5v14l11-7z" />
@@ -242,39 +257,60 @@ export default function SharedPlaylistPage() {
                         }`}
                       >
                         {/* Track number */}
-                        <span className="w-6 text-center text-sm text-surface-500">
+                        <span className="w-5 text-center text-sm text-surface-500 shrink-0">
                           {index + 1}
                         </span>
 
-                        {/* Play button */}
+                        {/* Cover art with play button overlay */}
                         <button
                           onClick={() => handlePlay(track)}
                           disabled={!track.current_version_id}
-                          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface-700 text-white hover:bg-surface-600 disabled:opacity-50 transition-colors"
+                          className="relative h-12 w-12 shrink-0 rounded-lg overflow-hidden bg-surface-800 group disabled:opacity-50"
                         >
-                          {isCurrentlyPlaying ? (
-                            <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-                              <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
-                            </svg>
+                          {track.cover_art_path ? (
+                            <img
+                              src={getAssetUrl(track.cover_art_path)}
+                              alt=""
+                              className="h-full w-full object-cover"
+                            />
                           ) : (
-                            <svg className="h-4 w-4 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
-                              <path d="M8 5v14l11-7z" />
-                            </svg>
+                            <div className="flex h-full w-full items-center justify-center">
+                              <svg className="h-5 w-5 text-surface-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                              </svg>
+                            </div>
                           )}
+                          {/* Play/pause overlay */}
+                          <div className={`absolute inset-0 flex items-center justify-center bg-black/50 transition-opacity ${
+                            isCurrentTrack ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                          }`}>
+                            {isCurrentlyPlaying ? (
+                              <svg className="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+                              </svg>
+                            ) : (
+                              <svg className="h-5 w-5 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M8 5v14l11-7z" />
+                              </svg>
+                            )}
+                          </div>
                         </button>
 
                         {/* Track info */}
                         <div className="min-w-0 flex-1">
                           <p className="truncate font-medium text-white">{track.title}</p>
-                          {track.artist && (
-                            <p className="truncate text-sm text-surface-400">{track.artist}</p>
-                          )}
+                          <div className="flex items-center gap-2 text-sm text-surface-400">
+                            {track.artist && (
+                              <>
+                                <span className="truncate">{track.artist}</span>
+                                <span>-</span>
+                              </>
+                            )}
+                            <span>
+                              {track.duration_seconds ? formatDuration(track.duration_seconds) : '--:--'}
+                            </span>
+                          </div>
                         </div>
-
-                        {/* Duration */}
-                        <span className="text-sm text-surface-500">
-                          {track.duration_seconds ? formatDuration(track.duration_seconds) : '--:--'}
-                        </span>
                       </div>
                     )
                   })

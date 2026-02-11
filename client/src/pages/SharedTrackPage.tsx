@@ -132,9 +132,9 @@ export default function SharedTrackPage() {
           {/* Track Card */}
           <div className="rounded-2xl bg-surface-900 p-6">
             {/* Track Header */}
-            <div className="mb-6 flex gap-6">
+            <div className="mb-6 flex flex-col sm:flex-row gap-6">
               {/* Cover Art */}
-              <div className="relative h-40 w-40 shrink-0 rounded-xl bg-surface-800 overflow-hidden">
+              <div className="relative w-full sm:h-40 sm:w-40 aspect-square sm:aspect-auto shrink-0 rounded-xl bg-surface-800 overflow-hidden">
                 {track.cover_art_path ? (
                   <img
                     src={getAssetUrl(track.cover_art_path)}
@@ -144,7 +144,7 @@ export default function SharedTrackPage() {
                 ) : (
                   <div className="flex h-full w-full items-center justify-center">
                     <svg
-                      className="h-16 w-16 text-surface-600"
+                      className="h-16 w-16 sm:h-16 sm:w-16 text-surface-600"
                       fill="none"
                       viewBox="0 0 24 24"
                       stroke="currentColor"
@@ -181,8 +181,8 @@ export default function SharedTrackPage() {
               </div>
 
               {/* Track Info */}
-              <div className="flex-1 min-w-0">
-                <div className="mb-2 flex items-center gap-2">
+              <div className="flex-1 min-w-0 text-center sm:text-left">
+                <div className="mb-2 flex items-center justify-center sm:justify-start gap-2">
                   <span
                     className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
                       statusColors[track.status] || 'bg-surface-700 text-surface-300'
@@ -210,7 +210,7 @@ export default function SharedTrackPage() {
                 {track.current_version_id && (
                   <button
                     onClick={handlePlay}
-                    className="mt-4 flex items-center gap-2 rounded-full bg-primary-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
+                    className="mt-4 mx-auto sm:mx-0 flex items-center gap-2 rounded-full bg-primary-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
                   >
                     {isCurrentlyPlaying ? (
                       <>

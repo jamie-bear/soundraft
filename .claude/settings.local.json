@@ -3,7 +3,11 @@
     "allow": [
       "Bash(cd:*)",
       "Bash(npx tsc:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(where:*)",
+      "Bash(cmd /c \"where node 2>&1 & where npm 2>&1 & where pnpm 2>&1 & where bun 2>&1\")",
+      "Bash(cmd /c \"where node & where npm & where pnpm\")",
+      "Bash(cmd /c \"node --version 2>&1\")"
     ]
   }
 }
