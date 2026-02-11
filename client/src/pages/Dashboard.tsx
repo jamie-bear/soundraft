@@ -15,6 +15,7 @@ export default function Dashboard() {
   const [tracks, setTracks] = useState<Track[]>([])
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [loading, setLoading] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
   const [showCreateTrack, setShowCreateTrack] = useState(false)
   const [showCreatePlaylist, setShowCreatePlaylist] = useState(false)
   const [newTitle, setNewTitle] = useState('')
@@ -102,34 +103,57 @@ export default function Dashboard() {
     }
   }
 
+  // Filter tracks and playlists by search query
+  const filteredTracks = tracks.filter(track =>
+    searchQuery === '' ||
+    track.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (track.artist && track.artist.toLowerCase().includes(searchQuery.toLowerCase()))
+  )
+
+  const filteredPlaylists = playlists.filter(playlist =>
+    searchQuery === '' ||
+    playlist.title.toLowerCase().includes(searchQuery.toLowerCase())
+  )
+
   return (
     <div>
       {/* Header */}
-      <div className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-          <p className="text-surface-400">Manage your tracks and playlists</p>
+      <div className="mb-6">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-white">Dashboard</h1>
+            <p className="text-surface-400">Manage your tracks and playlists</p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowCreatePlaylist(true)}
+              className="flex items-center gap-2 rounded-lg bg-surface-800 px-4 py-2 text-sm font-medium text-white hover:bg-surface-700 transition-colors"
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              New Playlist
+            </button>
+            <button
+              onClick={() => setShowCreateTrack(true)}
+              className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              New Track
+            </button>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowCreatePlaylist(true)}
-            className="flex items-center gap-2 rounded-lg bg-surface-800 px-4 py-2 text-sm font-medium text-white hover:bg-surface-700 transition-colors"
-          >
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            New Playlist
-          </button>
-          <button
-            onClick={() => setShowCreateTrack(true)}
-            className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
-          >
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            New Track
-          </button>
-        </div>
+
+        {/* Search bar */}
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search tracks and playlists..."
+          className="w-full rounded-lg border border-surface-700 bg-surface-800 px-4 py-2 text-white placeholder-surface-500 focus:border-primary-500 focus:outline-none"
+        />
       </div>
 
       {/* Loading state */}
@@ -142,20 +166,24 @@ export default function Dashboard() {
           {/* Tracks Section */}
           <section className="mb-12">
             <h2 className="mb-4 text-lg font-semibold text-white">Recent Tracks</h2>
-            
-            {tracks.length === 0 ? (
+
+            {filteredTracks.length === 0 ? (
               <div className="rounded-xl border border-dashed border-surface-700 bg-surface-900/50 p-8 text-center">
-                <p className="mb-4 text-surface-400">No tracks yet</p>
-                <button
-                  onClick={() => setShowCreateTrack(true)}
-                  className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
-                >
-                  Create your first track
-                </button>
+                <p className="mb-4 text-surface-400">
+                  {searchQuery ? 'No tracks found matching your search' : 'No tracks yet'}
+                </p>
+                {!searchQuery && (
+                  <button
+                    onClick={() => setShowCreateTrack(true)}
+                    className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
+                  >
+                    Create your first track
+                  </button>
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {tracks.map((track) => {
+                {filteredTracks.map((track) => {
                   const isCurrentlyPlaying = currentTrack?.id === track.id && isPlaying
                   
                   return (
@@ -294,20 +322,24 @@ export default function Dashboard() {
           {/* Playlists Section */}
           <section>
             <h2 className="mb-4 text-lg font-semibold text-white">Playlists</h2>
-            
-            {playlists.length === 0 ? (
+
+            {filteredPlaylists.length === 0 ? (
               <div className="rounded-xl border border-dashed border-surface-700 bg-surface-900/50 p-8 text-center">
-                <p className="mb-4 text-surface-400">No playlists yet</p>
-                <button
-                  onClick={() => setShowCreatePlaylist(true)}
-                  className="inline-flex items-center gap-2 rounded-lg bg-surface-800 px-4 py-2 text-sm font-medium text-white hover:bg-surface-700 transition-colors"
-                >
-                  Create your first playlist
-                </button>
+                <p className="mb-4 text-surface-400">
+                  {searchQuery ? 'No playlists found matching your search' : 'No playlists yet'}
+                </p>
+                {!searchQuery && (
+                  <button
+                    onClick={() => setShowCreatePlaylist(true)}
+                    className="inline-flex items-center gap-2 rounded-lg bg-surface-800 px-4 py-2 text-sm font-medium text-white hover:bg-surface-700 transition-colors"
+                  >
+                    Create your first playlist
+                  </button>
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {playlists.map((playlist) => (
+                {filteredPlaylists.map((playlist) => (
                   <div
                     key={playlist.id}
                     className="group relative rounded-xl border border-surface-800 bg-surface-900 p-4 hover:border-surface-700 transition-colors"

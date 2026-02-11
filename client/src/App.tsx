@@ -4,6 +4,8 @@ import { useAuthStore } from './stores/authStore'
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
 import Dashboard from './pages/Dashboard'
+import TracksPage from './pages/TracksPage'
+import PlaylistsPage from './pages/PlaylistsPage'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import TrackDetail from './pages/TrackDetail'
@@ -41,7 +43,9 @@ function App() {
         }
       >
         <Route index element={<Dashboard />} />
+        <Route path="tracks" element={<TracksPage />} />
         <Route path="tracks/:id" element={<TrackDetail />} />
+        <Route path="playlists" element={<PlaylistsPage />} />
         <Route path="playlists/:id" element={<PlaylistDetail />} />
       </Route>
 
