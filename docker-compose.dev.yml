@@ -1,13 +1,29 @@
+# Development stack — Vite dev server with HMR, bind mounts, pgadmin
+# Usage: docker compose -f docker-compose.dev.yml up
 services:
-  # Backend API + Frontend (built into image)
+  # Frontend (Vite dev server with HMR)
+  client:
+    image: node:18-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host"
+    ports:
+      - "2950:5173"
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    depends_on:
+      - api
+
+  # Backend API (dev mode with --watch)
   api:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
-      additional_contexts:
-        client-build: ./client
+    image: node:18-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
     ports:
       - "8080:8080"
+    volumes:
+      - ./server:/app
+      - /app/node_modules
     depends_on:
       db:
         condition: service_healthy
@@ -55,6 +71,20 @@ services:
     volumes:
       - minio_data:/data
 
+  # Database GUI (optional dev tool)
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - db
+
 volumes:
   pg_data:
   minio_data:
+  pgadmin_data:
