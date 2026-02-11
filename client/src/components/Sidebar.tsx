@@ -89,15 +89,21 @@ export default function Sidebar({ onClose }: SidebarProps) {
       <div className="border-t border-surface-800 p-4">
         <div className="rounded-lg border border-surface-700 bg-surface-800 p-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-600 text-sm font-medium text-white">
-              {user?.email?.charAt(0).toUpperCase() || 'U'}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-white">
-                {user?.role === 'ADMIN' ? 'Admin' : 'User'}
-              </p>
-              <p className="truncate text-xs text-surface-400">{user?.email}</p>
-            </div>
+            <Link
+              to="/settings"
+              onClick={handleNavClick}
+              className="flex min-w-0 flex-1 items-center gap-3 rounded -m-1 p-1 transition-colors hover:bg-surface-700"
+            >
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-600 text-sm font-medium text-white">
+                {user?.email?.charAt(0).toUpperCase() || 'U'}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-white">
+                  {user?.role === 'ADMIN' ? 'Admin' : 'User'}
+                </p>
+                <p className="truncate text-xs text-surface-400">{user?.email}</p>
+              </div>
+            </Link>
             <button
               onClick={handleLogout}
               className="rounded p-1 text-surface-400 hover:bg-surface-700 hover:text-white transition-colors"
