@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { tracksApi, playlistsApi, Track, Playlist, getAssetUrl } from '../lib/api'
 import { usePlayerStore } from '../stores/playerStore'

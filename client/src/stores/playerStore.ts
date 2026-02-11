@@ -87,7 +87,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         // Auto-play next track if available
         get().playNext()
       },
-      onloaderror: (id, error) => {
+      onloaderror: (_id, error) => {
         console.error('Audio load error:', error)
       },
     })
@@ -142,7 +142,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
             set({ isPlaying: false, progress: 0 })
             get().playNext()
           },
-          onloaderror: (id, error) => {
+          onloaderror: (_id, error) => {
             console.error('Audio load error:', error)
           },
         })
@@ -199,7 +199,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
           set({ isPlaying: false, progress: 0 })
           get().playNext()
         },
-        onloaderror: (id, error) => {
+        onloaderror: (_id, error) => {
           console.error('Audio load error:', error)
         },
       })

@@ -1,27 +1,13 @@
 services:
-  # Frontend Application
-  client:
-    image: node:18-alpine
-    working_dir: /app
-    command: sh -c "npm install && npm run dev -- --host"
-    ports:
-      - "2950:5173"
-    volumes:
-      - ./client:/app
-      - /app/node_modules
-    depends_on:
-      - api
-
-  # Backend API
+  # Backend API + Frontend (built into image)
   api:
-    image: node:18-alpine
-    working_dir: /app
-    command: sh -c "npm install && npm run dev"
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      additional_contexts:
+        client-build: ./client
     ports:
       - "8080:8080"
-    volumes:
-      - ./server:/app
-      - /app/node_modules
     depends_on:
       db:
         condition: service_healthy
@@ -69,20 +55,6 @@ services:
     volumes:
       - minio_data:/data
 
-  # Database Management GUI (Optional)
-  pgadmin:
-    image: dpage/pgadmin4
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@example.com
-      PGADMIN_DEFAULT_PASSWORD: admin
-    ports:
-      - "5050:80"
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
-    depends_on:
-      - db
-
 volumes:
   pg_data:
   minio_data:
-  pgadmin_data:
