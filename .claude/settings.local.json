@@ -7,7 +7,10 @@
       "Bash(where:*)",
       "Bash(cmd /c \"where node 2>&1 & where npm 2>&1 & where pnpm 2>&1 & where bun 2>&1\")",
       "Bash(cmd /c \"where node & where npm & where pnpm\")",
-      "Bash(cmd /c \"node --version 2>&1\")"
+      "Bash(cmd /c \"node --version 2>&1\")",
+      "Bash(dir:*)",
+      "Bash(npm install:*)",
+      "Bash(cmd /c \"cd /d S:\\\\Cloud Sync\\\\01 Jamie\\\\04 Projects\\\\04 Software Development\\\\Soundraft\\\\soundraft\\\\server && npm install archiver\")"
     ]
   }
 }

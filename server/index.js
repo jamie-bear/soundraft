@@ -218,6 +218,7 @@ const attachmentRoutes = require('./routes/attachments')(pool, minioClient, BUCK
 const commentRoutes = require('./routes/comments')(pool);
 const adminRoutes = require('./routes/admin')(pool);
 const reactionRoutes = require('./routes/reactions')(pool);
+const exportRoutes = require('./routes/export')(pool, minioClient, BUCKET_NAME, upload);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/tracks', trackRoutes);
@@ -226,6 +227,7 @@ app.use('/api/attachments', attachmentRoutes);
 app.use('/api/comments', commentRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/reactions', reactionRoutes);
+app.use('/api/export', exportRoutes);
 
 // --- Health Check ---
 app.get('/api/health', (req, res) => {

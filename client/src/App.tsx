@@ -12,6 +12,7 @@ import TrackDetail from './pages/TrackDetail'
 import PlaylistDetail from './pages/PlaylistDetail'
 import SharedTrackPage from './pages/SharedTrackPage'
 import SharedPlaylistPage from './pages/SharedPlaylistPage'
+import UserSettings from './pages/UserSettings'
 import AdminLayout from './pages/admin/AdminLayout'
 import UserManagement from './pages/admin/UserManagement'
 import SystemSettings from './pages/admin/SystemSettings'
@@ -47,6 +48,7 @@ function App() {
         <Route path="tracks/:id" element={<TrackDetail />} />
         <Route path="playlists" element={<PlaylistsPage />} />
         <Route path="playlists/:id" element={<PlaylistDetail />} />
+        <Route path="settings" element={<UserSettings />} />
       </Route>
 
       {/* Admin routes */}

@@ -596,4 +596,12 @@ export const reactionsApi = {
     }),
 }
 
+// Export API
+export const exportApi = {
+  getLibraryExportUrl: (mode: 'tracks' | 'playlists') => {
+    const token = localStorage.getItem('token')
+    return `${API_URL}/export/library?mode=${mode}&auth=${token}`
+  },
+}
+
 export { ApiError }
