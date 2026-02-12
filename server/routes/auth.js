@@ -1,15 +1,25 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
+const rateLimit = require('express-rate-limit');
 const { generateToken, requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
+
+// V6: Rate limiting for auth endpoints — prevent brute-force attacks
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 5,                    // 5 attempts per window
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many attempts. Please try again later.' },
+});
 
 module.exports = function(pool) {
     /**
      * POST /api/auth/register
      * Create a new user account
      */
-    router.post('/register', async (req, res) => {
+    router.post('/register', authLimiter, async (req, res) => {
         try {
             const { email, password } = req.body;
 
@@ -18,8 +28,9 @@ module.exports = function(pool) {
                 return res.status(400).json({ error: 'Email and password are required' });
             }
 
-            if (password.length < 6) {
-                return res.status(400).json({ error: 'Password must be at least 6 characters' });
+            // V11: Stricter password minimum
+            if (password.length < 8) {
+                return res.status(400).json({ error: 'Password must be at least 8 characters' });
             }
 
             // Check if signups are enabled
@@ -42,7 +53,7 @@ module.exports = function(pool) {
 
             // Hash password and create user
             const passwordHash = await bcrypt.hash(password, 10);
-            
+
             const result = await pool.query(
                 'INSERT INTO users (email, password_hash, last_login_at) VALUES ($1, $2, CURRENT_TIMESTAMP) RETURNING id, email, role, created_at',
                 [email.toLowerCase(), passwordHash]
@@ -69,7 +80,7 @@ module.exports = function(pool) {
      * POST /api/auth/login
      * Authenticate user and return JWT
      */
-    router.post('/login', async (req, res) => {
+    router.post('/login', authLimiter, async (req, res) => {
         try {
             const { email, password } = req.body;
 
@@ -97,7 +108,7 @@ module.exports = function(pool) {
 
             // Verify password
             const validPassword = await bcrypt.compare(password, user.password_hash);
-            
+
             if (!validPassword) {
                 return res.status(401).json({ error: 'Invalid credentials' });
             }

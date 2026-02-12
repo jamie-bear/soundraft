@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const { Pool } = require('pg');
 const Minio = require('minio');
 const bcrypt = require('bcrypt');
@@ -11,12 +12,25 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Middleware
-app.use(cors());
+// V8: Security headers via helmet
+app.use(helmet({
+    contentSecurityPolicy: false, // Disabled for SPA — CSP is set per-endpoint where needed
+    crossOriginEmbedderPolicy: false, // Allow audio/image loading
+}));
+
+// V7: Restrict CORS to configured origins
+const corsOrigin = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
+    : undefined; // undefined = allow all (dev); set CORS_ORIGIN in production
+app.use(cors({
+    origin: corsOrigin,
+    credentials: true,
+}));
+
 app.use(express.json());
 
 // File upload configuration
-const upload = multer({ 
+const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 500 * 1024 * 1024 } // 500MB limit
 });
@@ -55,13 +69,13 @@ async function initialize() {
     try {
         const adminEmail = process.env.ADMIN_EMAIL;
         const adminPassword = process.env.ADMIN_PASSWORD;
-        
+
         if (adminEmail && adminPassword) {
             const existing = await pool.query(
                 'SELECT id FROM users WHERE email = $1',
                 [adminEmail]
             );
-            
+
             if (existing.rows.length === 0) {
                 const hash = await bcrypt.hash(adminPassword, 10);
                 const result = await pool.query(
@@ -96,14 +110,14 @@ async function seedExampleContent(adminUserId) {
         'SELECT id FROM tracks WHERE owner_id = $1 LIMIT 1',
         [adminUserId]
     );
-    
+
     if (existingTracks.rows.length > 0) {
         console.log('Admin already has tracks, skipping example content seeding');
         return;
     }
 
     const seedDir = path.join(__dirname, 'seed-data');
-    
+
     // Check if seed directory exists
     if (!fs.existsSync(seedDir)) {
         console.log('Seed data directory not found, skipping seeding');
@@ -136,7 +150,7 @@ async function seedExampleContent(adminUserId) {
     // 2. Upload track audio file
     const trackBuffer = fs.readFileSync(trackFilePath);
     const trackStorageKey = `tracks/${trackId}/versions/${crypto.randomBytes(16).toString('hex')}.wav`;
-    
+
     await minioClient.putObject(BUCKET_NAME, trackStorageKey, trackBuffer, {
         'Content-Type': 'audio/wav'
     });
@@ -163,7 +177,7 @@ async function seedExampleContent(adminUserId) {
     if (fs.existsSync(trackCoverPath)) {
         const coverBuffer = fs.readFileSync(trackCoverPath);
         const coverStorageKey = `tracks/${trackId}/cover.jpg`;
-        
+
         await minioClient.putObject(BUCKET_NAME, coverStorageKey, coverBuffer, {
             'Content-Type': 'image/jpeg'
         });
@@ -195,7 +209,7 @@ async function seedExampleContent(adminUserId) {
     if (fs.existsSync(playlistCoverPath)) {
         const playlistCoverBuffer = fs.readFileSync(playlistCoverPath);
         const playlistCoverStorageKey = `playlists/${playlistId}/cover.png`;
-        
+
         await minioClient.putObject(BUCKET_NAME, playlistCoverStorageKey, playlistCoverBuffer, {
             'Content-Type': 'image/png'
         });
@@ -235,22 +249,23 @@ app.get('/api/health', (req, res) => {
 });
 
 // --- Storage Endpoint (for cover art, etc.) ---
+// V2: Hardened — removed SVG from MIME map, added nosniff + sandbox headers
 app.get('/api/storage/*', async (req, res) => {
     try {
         // Extract storage key from path (everything after /api/storage/)
         const storageKey = req.params[0];
-        
+
         if (!storageKey) {
             return res.status(400).send('Invalid storage key');
         }
 
         // Get object from MinIO
         const stat = await minioClient.statObject(BUCKET_NAME, storageKey);
-        
+
         // Determine content type from file extension if not in metadata
         let contentType = stat.metaData?.['content-type'] || stat.metaData?.['Content-Type'];
         if (!contentType) {
-            // Infer from file extension
+            // Infer from file extension — SVG intentionally excluded (XSS risk)
             const ext = storageKey.split('.').pop()?.toLowerCase();
             const mimeTypes = {
                 'jpg': 'image/jpeg',
@@ -258,18 +273,24 @@ app.get('/api/storage/*', async (req, res) => {
                 'png': 'image/png',
                 'gif': 'image/gif',
                 'webp': 'image/webp',
-                'svg': 'image/svg+xml',
                 'mp3': 'audio/mpeg',
                 'wav': 'audio/wav',
                 'pdf': 'application/pdf',
             };
             contentType = mimeTypes[ext] || 'application/octet-stream';
         }
-        
+
+        // V2: Force safe content type for potentially dangerous stored types
+        if (contentType === 'image/svg+xml' || contentType === 'text/html') {
+            contentType = 'application/octet-stream';
+        }
+
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Length', stat.size);
         res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
-        
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Security-Policy', 'sandbox');
+
         const dataStream = await minioClient.getObject(BUCKET_NAME, storageKey);
         dataStream.pipe(res);
     } catch (err) {
@@ -282,14 +303,21 @@ app.get('/api/storage/*', async (req, res) => {
 });
 
 // --- CRITICAL: Audio Streaming Endpoint ---
+// V1: Added authorization — must be track owner or have valid share token
 // Handles Range headers to allow seeking in the frontend player
-app.get('/api/stream/:versionId', async (req, res) => {
+const { optionalAuth } = require('./middleware/auth');
+
+app.get('/api/stream/:versionId', optionalAuth, async (req, res) => {
     try {
         const { versionId } = req.params;
 
-        // 1. Fetch file metadata from DB
+        // 1. Fetch file metadata + track ownership from DB
         const result = await pool.query(
-            'SELECT storage_key, mime_type, size_bytes FROM track_versions WHERE id = $1',
+            `SELECT tv.storage_key, tv.mime_type, tv.size_bytes,
+                    t.owner_id, t.share_token, t.release_status
+             FROM track_versions tv
+             JOIN tracks t ON tv.track_id = t.id
+             WHERE tv.id = $1`,
             [versionId]
         );
 
@@ -298,11 +326,22 @@ app.get('/api/stream/:versionId', async (req, res) => {
         }
 
         const file = result.rows[0];
+
+        // 2. Authorization check: owner, or valid share token + public
+        const isOwner = req.user && req.user.id === file.owner_id;
+        const shareToken = req.query.token;
+        const hasValidShare = shareToken && shareToken === file.share_token
+                              && file.release_status === 'PUBLIC';
+
+        if (!isOwner && !hasValidShare) {
+            return res.status(403).send('Access denied');
+        }
+
         const stat = await minioClient.statObject(BUCKET_NAME, file.storage_key);
         const fileSize = stat.size;
         const range = req.headers.range;
 
-        // 2. Handle Range Request (Seeking)
+        // 3. Handle Range Request (Seeking)
         if (range) {
             const parts = range.replace(/bytes=/, "").split("-");
             const start = parseInt(parts[0], 10);
@@ -327,7 +366,7 @@ app.get('/api/stream/:versionId', async (req, res) => {
             dataStream.pipe(res);
 
         } else {
-            // 3. Handle Full Download
+            // 4. Handle Full Download
             const headers = {
                 'Content-Length': fileSize,
                 'Content-Type': file.mime_type,

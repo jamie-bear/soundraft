@@ -13,6 +13,9 @@ RUN npm run build
 FROM node:18-alpine
 WORKDIR /app
 
+# V14: Create non-root user for running the application
+RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
+
 # Install server dependencies
 COPY package*.json ./
 RUN npm ci --production
@@ -22,6 +25,9 @@ COPY . .
 
 # Copy built frontend from stage 1
 COPY --from=frontend /app/dist ./public
+
+# V14: Run as non-root user
+USER nodejs
 
 EXPOSE 8080
 CMD ["node", "index.js"]
