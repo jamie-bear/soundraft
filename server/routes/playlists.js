@@ -365,7 +365,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
         } catch (e) {
             await client.query('ROLLBACK');
             console.error('Reorder error:', e);
-            res.status(500).json({ error: e.message });
+            res.status(500).json({ error: 'Failed to reorder tracks' });
         } finally {
             client.release();
         }

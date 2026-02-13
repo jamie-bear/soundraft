@@ -3,8 +3,17 @@ const { requireAuth, requireAuthWithQuery } = require('../middleware/auth');
 
 const router = express.Router();
 
+// V9: Dangerous file extensions that could enable XSS or code execution
+const BLOCKED_EXTENSIONS = new Set([
+    '.html', '.htm', '.xhtml', '.svg',
+    '.js', '.mjs', '.cjs', '.jsx', '.ts', '.tsx',
+    '.exe', '.bat', '.cmd', '.sh', '.ps1',
+    '.php', '.jsp', '.asp', '.aspx',
+    '.swf', '.xss',
+]);
+
 module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
-    
+
     /**
      * GET /api/attachments/track/:trackId
      * List attachments for a track (OWNER ONLY)
@@ -67,6 +76,12 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             // OWNER ONLY
             if (track.rows[0].owner_id !== req.user.id) {
                 return res.status(403).json({ error: 'Access denied - only owner can upload attachments' });
+            }
+
+            // V9: Block dangerous file types
+            const fileExt = '.' + (req.file.originalname.split('.').pop() || '').toLowerCase();
+            if (BLOCKED_EXTENSIONS.has(fileExt)) {
+                return res.status(400).json({ error: `File type ${fileExt} is not allowed for security reasons` });
             }
 
             // Generate storage key

@@ -1,6 +1,29 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key';
+const JWT_SECRET = process.env.JWT_SECRET;
+
+// V4: Validate JWT secret at startup — refuse to run with missing or known-weak defaults
+const KNOWN_DEV_SECRETS = [
+    'dev_secret_key',
+    'dev_secret_key_change_in_prod',
+    'dev_secret_key_change_in_prod_use_random_string',
+    'secret',
+    'changeme',
+];
+
+if (!JWT_SECRET) {
+    throw new Error('FATAL: JWT_SECRET environment variable is not set. Refusing to start.');
+}
+
+if (KNOWN_DEV_SECRETS.includes(JWT_SECRET)) {
+    console.warn(
+        'WARNING: JWT_SECRET is set to a known development default. ' +
+        'Generate a strong random secret for production (e.g. openssl rand -hex 64).'
+    );
+}
+
+// V3: Pin JWT algorithm to prevent "none" algorithm attacks
+const JWT_VERIFY_OPTIONS = { algorithms: ['HS256'] };
 
 /**
  * Middleware: Require valid JWT token
@@ -8,7 +31,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key';
  */
 function requireAuth(req, res, next) {
     const authHeader = req.headers.authorization;
-    
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ error: 'No token provided' });
     }
@@ -16,7 +39,7 @@ function requireAuth(req, res, next) {
     const token = authHeader.split(' ')[1];
 
     try {
-        const decoded = jwt.verify(token, JWT_SECRET);
+        const decoded = jwt.verify(token, JWT_SECRET, JWT_VERIFY_OPTIONS);
         req.user = decoded;
         next();
     } catch (err) {
@@ -27,28 +50,30 @@ function requireAuth(req, res, next) {
 /**
  * Middleware: Require valid JWT token (accepts both header and query param)
  * Use for download endpoints that need direct browser access
+ * NOTE: Tokens in query params are logged in URLs/browser history/referer headers.
+ * Consider migrating to signed URLs for improved security.
  * Sets req.user with decoded token payload
  */
 function requireAuthWithQuery(req, res, next) {
     let token = null;
-    
+
     // First try Authorization header
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
         token = authHeader.split(' ')[1];
     }
-    
+
     // If no header, try query param 'auth'
     if (!token && req.query.auth) {
         token = req.query.auth;
     }
-    
+
     if (!token) {
         return res.status(401).json({ error: 'No token provided' });
     }
 
     try {
-        const decoded = jwt.verify(token, JWT_SECRET);
+        const decoded = jwt.verify(token, JWT_SECRET, JWT_VERIFY_OPTIONS);
         req.user = decoded;
         next();
     } catch (err) {
@@ -62,7 +87,7 @@ function requireAuthWithQuery(req, res, next) {
  */
 function optionalAuth(req, res, next) {
     const authHeader = req.headers.authorization;
-    
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         req.user = null;
         return next();
@@ -71,12 +96,12 @@ function optionalAuth(req, res, next) {
     const token = authHeader.split(' ')[1];
 
     try {
-        const decoded = jwt.verify(token, JWT_SECRET);
+        const decoded = jwt.verify(token, JWT_SECRET, JWT_VERIFY_OPTIONS);
         req.user = decoded;
     } catch (err) {
         req.user = null;
     }
-    
+
     next();
 }
 
@@ -88,7 +113,7 @@ function checkOwnership(getOwnerId) {
     return async (req, res, next) => {
         try {
             const ownerId = await getOwnerId(req);
-            
+
             if (!ownerId) {
                 return res.status(404).json({ error: 'Resource not found' });
             }
@@ -114,7 +139,7 @@ function checkShareAccess(getResource) {
     return async (req, res, next) => {
         try {
             const resource = await getResource(req);
-            
+
             if (!resource) {
                 return res.status(404).json({ error: 'Resource not found' });
             }
@@ -129,7 +154,7 @@ function checkShareAccess(getResource) {
 
             // Check share token
             const token = req.query.token || req.params.token;
-            
+
             if (resource.share_token && token === resource.share_token) {
                 // Check if resource is public
                 if (resource.is_public || resource.release_status === 'PUBLIC') {
@@ -142,7 +167,7 @@ function checkShareAccess(getResource) {
             if (!req.user) {
                 return res.status(401).json({ error: 'Authentication required' });
             }
-            
+
             return res.status(403).json({ error: 'Access denied' });
         } catch (err) {
             console.error('Share access check error:', err);
@@ -157,11 +182,11 @@ function checkShareAccess(getResource) {
  */
 function requireOwnerForWrite(req, res, next) {
     const writeMethod = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
-    
+
     if (writeMethod && req.accessLevel !== 'OWNER') {
         return res.status(403).json({ error: 'Write access denied' });
     }
-    
+
     next();
 }
 
