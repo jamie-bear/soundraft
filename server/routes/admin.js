@@ -13,7 +13,10 @@ module.exports = function(pool) {
      */
     router.get('/users', async (req, res) => {
         try {
-            const { search, page = 1, limit = 50 } = req.query;
+            const { search } = req.query;
+            // V10: Parse and clamp pagination params to prevent abuse
+            const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+            const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
             const offset = (page - 1) * limit;
 
             let query = `
