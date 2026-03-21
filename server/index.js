@@ -14,6 +14,10 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+// Trust the first proxy hop (Caddy, nginx, etc.) so req.protocol reflects
+// X-Forwarded-Proto and OG meta URLs use https:// on proxied deployments.
+app.set('trust proxy', 1);
+
 // Security headers via helmet with CSP enabled for SPA
 app.use(helmet({
     contentSecurityPolicy: {
