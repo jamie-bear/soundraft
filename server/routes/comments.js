@@ -1,7 +1,17 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { requireAuth, optionalAuth } = require('../middleware/auth');
+const { sanitizeText } = require('../index');
 
 const router = express.Router();
+
+const commentLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many comments. Please wait a moment.' },
+});
 
 module.exports = function(pool) {
     
@@ -102,7 +112,7 @@ module.exports = function(pool) {
      * POST /api/comments/track/:trackId
      * Add a comment to a track
      */
-    router.post('/track/:trackId', optionalAuth, async (req, res) => {
+    router.post('/track/:trackId', commentLimiter, optionalAuth, async (req, res) => {
         try {
             const { trackId } = req.params;
             const { body, audioTimestamp, token } = req.body;
@@ -125,7 +135,7 @@ module.exports = function(pool) {
                 INSERT INTO comments (user_id, track_id, body, audio_timestamp)
                 VALUES ($1, $2, $3, $4)
                 RETURNING id, body, audio_timestamp, created_at
-            `, [req.user?.id || null, trackId, body.trim(), audioTimestamp || null]);
+            `, [req.user?.id || null, trackId, sanitizeText(body), audioTimestamp || null]);
 
             const comment = result.rows[0];
             
@@ -187,7 +197,7 @@ module.exports = function(pool) {
      * POST /api/comments/playlist/:playlistId
      * Add a comment to a playlist
      */
-    router.post('/playlist/:playlistId', optionalAuth, async (req, res) => {
+    router.post('/playlist/:playlistId', commentLimiter, optionalAuth, async (req, res) => {
         try {
             const { playlistId } = req.params;
             const { body, token } = req.body;
@@ -210,7 +220,7 @@ module.exports = function(pool) {
                 INSERT INTO comments (user_id, playlist_id, body)
                 VALUES ($1, $2, $3)
                 RETURNING id, body, created_at
-            `, [req.user?.id || null, playlistId, body.trim()]);
+            `, [req.user?.id || null, playlistId, sanitizeText(body)]);
 
             const comment = result.rows[0];
             

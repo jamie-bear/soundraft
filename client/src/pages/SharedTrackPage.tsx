@@ -163,7 +163,7 @@ export default function SharedTrackPage() {
                 {track.current_version_id && (
                   <button
                     onClick={handlePlay}
-                    className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 hover:opacity-100 transition-opacity"
+                    className="absolute inset-0 flex items-center justify-center bg-black/40 sm:opacity-0 sm:hover:opacity-100 transition-opacity"
                   >
                     <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary-600 text-white shadow-lg">
                       {isCurrentlyPlaying ? (
