@@ -154,7 +154,7 @@ export default function TracksPage() {
                       e.stopPropagation()
                       setOpenMenuId(openMenuId === track.id ? null : track.id)
                     }}
-                    className="rounded-lg p-1.5 text-surface-400 hover:bg-surface-800 hover:text-white opacity-0 group-hover:opacity-100 transition-all"
+                    className="rounded-lg p-1.5 text-surface-400 hover:bg-surface-800 hover:text-white sm:opacity-0 sm:group-hover:opacity-100 transition-all"
                   >
                     <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
