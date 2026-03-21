@@ -24,7 +24,8 @@ Thumbs.db
 *.log
 npm-debug.log*
 
-# Docker volumes (local data)
+# Docker volumes / bind-mount data
+data/
 pg_data/
 minio_data/
 
