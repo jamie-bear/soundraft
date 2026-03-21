@@ -6,7 +6,6 @@ The application follows a **standard 3-tier architecture**, containerized for po
 
 **Components:**
 
-
 1. **Frontend (Client):** Single Page Application (SPA) built with **React** (Vite).
    * *Rationale:* SPAs provide the seamless, uninterrupted audio playback required while navigating between views. Server-side rendering (SSR) causes audio dropouts during page navigation.
 2. **Backend (API):** **Node.js** with **Express** (or NestJS).
