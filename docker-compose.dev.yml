@@ -69,7 +69,7 @@ services:
       - MINIO_ROOT_USER=minioadmin
       - MINIO_ROOT_PASSWORD=minioadmin
     volumes:
-      - minio_data:/data
+      - ${UPLOADS_LOCATION:-minio_data}:/data
 
   # Database GUI (optional dev tool)
   pgadmin:
