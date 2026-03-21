@@ -1,0 +1,19 @@
+{
+  "name": "SoundRaft",
+  "short_name": "SoundRaft",
+  "description": "Audio versioning and collaboration platform",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#081526",
+  "background_color": "#020913",
+  "icons": [
+    {
+      "src": "/soundraft-logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

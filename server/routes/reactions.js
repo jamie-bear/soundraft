@@ -1,9 +1,18 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 
 const router = express.Router();
 
 // Valid emoji types matching the 4 emojis from the spec
 const VALID_EMOJI_TYPES = ['heart', 'fire', 'laugh', 'cry'];
+
+const reactionLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many reactions. Please wait a moment.' },
+});
 
 module.exports = function(pool) {
     
@@ -112,7 +121,7 @@ module.exports = function(pool) {
      * Add or update a reaction to a track
      * Body: { visitorId, emojiType }
      */
-    router.post('/track/:trackId', async (req, res) => {
+    router.post('/track/:trackId', reactionLimiter, async (req, res) => {
         try {
             const { trackId } = req.params;
             const { visitorId, emojiType } = req.body;
@@ -155,7 +164,7 @@ module.exports = function(pool) {
      * Add or update a reaction to a playlist
      * Body: { visitorId, emojiType }
      */
-    router.post('/playlist/:playlistId', async (req, res) => {
+    router.post('/playlist/:playlistId', reactionLimiter, async (req, res) => {
         try {
             const { playlistId } = req.params;
             const { visitorId, emojiType } = req.body;

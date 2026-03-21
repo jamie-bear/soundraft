@@ -1,10 +1,25 @@
-import { useState } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { Outlet } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import Player from './Player'
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const touchStartX = useRef<number | null>(null)
+
+  // Swipe-left-to-close on mobile sidebar
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX
+  }, [])
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (touchStartX.current === null) return
+    const deltaX = e.changedTouches[0].clientX - touchStartX.current
+    if (deltaX < -60) {
+      setSidebarOpen(false)
+    }
+    touchStartX.current = null
+  }, [])
 
   return (
     <div className="flex h-screen flex-col bg-surface-950">
@@ -34,9 +49,13 @@ export default function Layout() {
         )}
 
         {/* Sidebar - hidden on mobile, shown as overlay when toggled */}
-        <div className={`fixed inset-y-0 left-0 z-50 w-64 transform transition-transform duration-200 sm:relative sm:translate-x-0 ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}>
+        <div
+          className={`fixed inset-y-0 left-0 z-50 w-64 transform transition-transform duration-200 sm:relative sm:translate-x-0 ${
+            sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+        >
           <Sidebar onClose={() => setSidebarOpen(false)} />
         </div>
 
