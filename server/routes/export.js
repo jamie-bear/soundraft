@@ -1,8 +1,17 @@
 const express = require('express');
 const archiver = require('archiver');
+const rateLimit = require('express-rate-limit');
 const { requireAuthWithQuery } = require('../middleware/auth');
 
 const router = express.Router();
+
+const exportLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 2,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many export requests. Please wait a moment.' },
+});
 
 // Sanitize folder/file names for zip paths
 function sanitize(name) {
@@ -63,7 +72,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
      * GET /api/export/library?mode=tracks|playlists&auth=TOKEN
      * Streams the user's entire library as a .zip file
      */
-    router.get('/library', requireAuthWithQuery, async (req, res) => {
+    router.get('/library', exportLimiter, requireAuthWithQuery, async (req, res) => {
         const userId = req.user.id;
         const mode = req.query.mode || 'tracks';
 

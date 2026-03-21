@@ -1,9 +1,21 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const mm = require('music-metadata');
+const fs = require('fs');
+const rateLimit = require('express-rate-limit');
 const { requireAuth, requireAuthWithQuery, optionalAuth, checkShareAccess } = require('../middleware/auth');
+const { sanitizeText } = require('../index');
 
 const router = express.Router();
+
+// Rate limiter for upload endpoints — 10/minute per IP
+const uploadLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many uploads. Please wait a moment.' },
+});
 
 module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
     
@@ -49,7 +61,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 INSERT INTO tracks (owner_id, title, artist, status, type, share_token)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING *
-            `, [req.user.id, title, artist, status, type, shareToken]);
+            `, [req.user.id, sanitizeText(title), sanitizeText(artist), status, type, shareToken]);
 
             res.status(201).json({ track: result.rows[0] });
         } catch (err) {
@@ -169,7 +181,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             }
 
             const result = await pool.query(`
-                UPDATE tracks 
+                UPDATE tracks
                 SET title = COALESCE($1, title),
                     artist = COALESCE($2, artist),
                     status = COALESCE($3, status),
@@ -179,7 +191,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = $7
                 RETURNING *
-            `, [title, artist, status, type, release_status, comment_access, id]);
+            `, [title ? sanitizeText(title) : null, artist ? sanitizeText(artist) : null, status, type, release_status, comment_access, id]);
 
             res.json({ track: result.rows[0] });
         } catch (err) {
@@ -275,7 +287,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
      * POST /api/tracks/:id/versions
      * Upload a new version of a track
      */
-    router.post('/:id/versions', requireAuth, upload.single('audio'), async (req, res) => {
+    router.post('/:id/versions', requireAuth, uploadLimiter, upload.single('audio'), async (req, res) => {
         try {
             const { id } = req.params;
 
@@ -286,6 +298,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             // Validate MIME type
             const allowedTypes = ['audio/mpeg', 'audio/wav', 'audio/mp3', 'audio/x-wav'];
             if (!allowedTypes.includes(req.file.mimetype)) {
+                if (req.file.path) fs.unlink(req.file.path, () => {});
                 return res.status(400).json({ error: 'Invalid file type. Only MP3 and WAV allowed.' });
             }
 
@@ -296,10 +309,12 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             );
 
             if (track.rows.length === 0) {
+                if (req.file.path) fs.unlink(req.file.path, () => {});
                 return res.status(404).json({ error: 'Track not found' });
             }
 
             if (track.rows[0].owner_id !== req.user.id) {
+                if (req.file.path) fs.unlink(req.file.path, () => {});
                 return res.status(403).json({ error: 'Access denied' });
             }
 
@@ -314,25 +329,27 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             const fileExt = req.file.originalname.split('.').pop();
             const storageKey = `tracks/${id}/v${versionNumber}_${Date.now()}.${fileExt}`;
 
-            // Upload to MinIO
-            await minioClient.putObject(
+            // Upload to MinIO from disk (streams file, avoids loading into memory)
+            await minioClient.fPutObject(
                 BUCKET_NAME,
                 storageKey,
-                req.file.buffer,
-                req.file.size,
+                req.file.path,
                 { 'Content-Type': req.file.mimetype }
             );
 
             // Extract duration using music-metadata
             let durationSeconds = 0;
             try {
-                const metadata = await mm.parseBuffer(req.file.buffer, req.file.mimetype);
+                const metadata = await mm.parseFile(req.file.path);
                 if (metadata.format.duration) {
                     durationSeconds = Math.round(metadata.format.duration);
                 }
             } catch (err) {
                 console.error('Failed to parse audio duration:', err.message);
             }
+
+            // Clean up temp file
+            fs.unlink(req.file.path, () => {});
 
             // Create version record
             const result = await pool.query(`
@@ -351,6 +368,8 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
 
             res.status(201).json({ version: newVersion });
         } catch (err) {
+            // Clean up temp file on error
+            if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
             console.error('Upload version error:', err);
             res.status(500).json({ error: 'Failed to upload version' });
         }
@@ -430,11 +449,11 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
 
             // Update version filename
             const result = await pool.query(`
-                UPDATE track_versions 
+                UPDATE track_versions
                 SET filename = $1
                 WHERE id = $2 AND track_id = $3
                 RETURNING *
-            `, [filename.trim(), versionId, trackId]);
+            `, [sanitizeText(filename), versionId, trackId]);
 
             if (result.rows.length === 0) {
                 return res.status(404).json({ error: 'Version not found' });
@@ -623,7 +642,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
      * Upload cover art for a track
      * Requirements: Square aspect ratio, max 20MB upload, auto-compress if >6MB
      */
-    router.post('/:id/cover', requireAuth, upload.single('cover'), async (req, res) => {
+    router.post('/:id/cover', requireAuth, uploadLimiter, upload.single('cover'), async (req, res) => {
         try {
             const { id } = req.params;
 
@@ -634,12 +653,14 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             // Validate file size (20MB max)
             const MAX_SIZE = 20 * 1024 * 1024; // 20MB
             if (req.file.size > MAX_SIZE) {
+                if (req.file.path) fs.unlink(req.file.path, () => {});
                 return res.status(400).json({ error: 'File size exceeds 20MB limit' });
             }
 
             // Validate MIME type
             const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
             if (!allowedTypes.includes(req.file.mimetype)) {
+                if (req.file.path) fs.unlink(req.file.path, () => {});
                 return res.status(400).json({ error: 'Invalid file type. Only JPEG, PNG, WebP, and GIF allowed.' });
             }
 
@@ -650,10 +671,12 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             );
 
             if (track.rows.length === 0) {
+                if (req.file.path) fs.unlink(req.file.path, () => {});
                 return res.status(404).json({ error: 'Track not found' });
             }
 
             if (track.rows[0].owner_id !== req.user.id) {
+                if (req.file.path) fs.unlink(req.file.path, () => {});
                 return res.status(403).json({ error: 'Access denied' });
             }
 
@@ -661,7 +684,6 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             const oldCoverPath = track.rows[0].cover_art_path;
             if (oldCoverPath) {
                 try {
-                    // Extract storage key from path
                     const oldKey = oldCoverPath.replace(/^.*\/storage\//, '');
                     await minioClient.removeObject(BUCKET_NAME, oldKey);
                 } catch (e) {
@@ -673,18 +695,16 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             const fileExt = req.file.mimetype.split('/')[1] === 'jpeg' ? 'jpg' : req.file.mimetype.split('/')[1];
             const storageKey = `covers/tracks/${id}_${Date.now()}.${fileExt}`;
 
-            // TODO: Image processing (crop to square, compress if >6MB)
-            // For now, upload as-is
-            let imageBuffer = req.file.buffer;
-
-            // Upload to MinIO
-            await minioClient.putObject(
+            // Upload to MinIO from disk
+            await minioClient.fPutObject(
                 BUCKET_NAME,
                 storageKey,
-                imageBuffer,
-                imageBuffer.length,
+                req.file.path,
                 { 'Content-Type': req.file.mimetype }
             );
+
+            // Clean up temp file
+            fs.unlink(req.file.path, () => {});
 
             // Generate the cover art URL path
             const coverArtPath = `/api/storage/${storageKey}`;

@@ -1,24 +1,38 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
 const Minio = require('minio');
 const bcrypt = require('bcrypt');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// V8: Security headers via helmet
+// Security headers via helmet with CSP enabled for SPA
 app.use(helmet({
-    contentSecurityPolicy: false, // Disabled for SPA — CSP is set per-endpoint where needed
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", "blob:", "data:"],
+            mediaSrc: ["'self'", "blob:"],
+            connectSrc: ["'self'"],
+            fontSrc: ["'self'"],
+            objectSrc: ["'none'"],
+            frameAncestors: ["'none'"],
+        },
+    },
     crossOriginEmbedderPolicy: false, // Allow audio/image loading
 }));
 
-// V7: Restrict CORS to configured origins
+// Restrict CORS to configured origins
 const corsOrigin = process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
     : undefined; // undefined = allow all (dev); set CORS_ORIGIN in production
@@ -29,25 +43,64 @@ app.use(cors({
 
 app.use(express.json());
 
-// File upload configuration
+// Global rate limiter — 200 requests/minute per IP
+const globalLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 200,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Please slow down.' },
+});
+app.use('/api/', globalLimiter);
+
+// File upload configuration — disk storage to avoid OOM on large uploads
+const uploadDir = path.join(os.tmpdir(), 'soundraft-uploads');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
 const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: 500 * 1024 * 1024 } // 500MB limit
+    storage: multer.diskStorage({
+        destination: uploadDir,
+        filename: (_req, file, cb) => {
+            const uniqueSuffix = crypto.randomBytes(8).toString('hex');
+            cb(null, `${uniqueSuffix}-${file.originalname}`);
+        },
+    }),
+    limits: { fileSize: 500 * 1024 * 1024 }, // 500MB limit
 });
 
 // Database Connection
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-// MinIO Client (S3 Compatible)
+// MinIO Client (S3 Compatible) — parse S3_ENDPOINT for flexible configuration
+function parseMinioConfig() {
+    const endpoint = process.env.S3_ENDPOINT || 'http://storage:9000';
+    try {
+        const url = new URL(endpoint);
+        return {
+            endPoint: url.hostname,
+            port: parseInt(url.port) || (url.protocol === 'https:' ? 443 : 9000),
+            useSSL: url.protocol === 'https:',
+        };
+    } catch {
+        return { endPoint: 'storage', port: 9000, useSSL: false };
+    }
+}
+
+const minioConfig = parseMinioConfig();
 const minioClient = new Minio.Client({
-    endPoint: 'storage',
-    port: 9000,
-    useSSL: false,
+    ...minioConfig,
     accessKey: process.env.S3_ACCESS_KEY,
     secretKey: process.env.S3_SECRET_KEY
 });
 
 const BUCKET_NAME = process.env.S3_BUCKET || 'tracks';
+
+// Input sanitization — strip HTML tags from plaintext user input
+function sanitizeText(input) {
+    if (typeof input !== 'string') return input;
+    return input.replace(/<[^>]*>/g, '').trim();
+}
 
 // --- Startup: Ensure bucket exists and seed admin ---
 async function initialize() {
@@ -382,10 +435,129 @@ app.get('/api/stream/:versionId', optionalAuth, async (req, res) => {
     }
 });
 
+// --- Database Migration Runner ---
+async function runMigrations() {
+    try {
+        // Create migrations tracking table if not exists
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                id SERIAL PRIMARY KEY,
+                filename VARCHAR(255) UNIQUE NOT NULL,
+                applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        const migrationsDir = path.join(__dirname, 'db', 'migrations');
+        if (!fs.existsSync(migrationsDir)) return;
+
+        const files = fs.readdirSync(migrationsDir)
+            .filter(f => f.endsWith('.sql'))
+            .sort();
+
+        for (const file of files) {
+            const { rows } = await pool.query(
+                'SELECT 1 FROM schema_migrations WHERE filename = $1',
+                [file]
+            );
+            if (rows.length === 0) {
+                const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+                await pool.query(sql);
+                await pool.query(
+                    'INSERT INTO schema_migrations (filename) VALUES ($1)',
+                    [file]
+                );
+                console.log(`Migration applied: ${file}`);
+            }
+        }
+    } catch (err) {
+        console.error('Migration error:', err.message);
+    }
+}
+
+// --- Open Graph Meta Tags for Share Links ---
+// Bot user-agents that request link previews
+const BOT_UA_PATTERNS = [
+    'facebookexternalhit', 'twitterbot', 'slackbot', 'linkedinbot',
+    'whatsapp', 'telegrambot', 'discordbot', 'applebot', 'googlebot',
+    'bingbot', 'iframely',
+];
+
+function isBot(userAgent) {
+    if (!userAgent) return false;
+    const ua = userAgent.toLowerCase();
+    return BOT_UA_PATTERNS.some(bot => ua.includes(bot));
+}
+
+async function handleShareOgTags(req, res, next) {
+    if (!isBot(req.headers['user-agent'])) return next();
+
+    const { type, token } = req.params;
+    if (!token || !['track', 'playlist'].includes(type)) return next();
+
+    try {
+        let title, description, imageUrl, audioUrl;
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+
+        if (type === 'track') {
+            const result = await pool.query(`
+                SELECT t.title, t.artist, t.cover_art_path, t.status,
+                       tv.duration_seconds, tv.id as version_id
+                FROM tracks t
+                LEFT JOIN track_versions tv ON t.current_version_id = tv.id
+                WHERE t.share_token = $1 AND t.release_status = 'PUBLIC'
+            `, [token]);
+            if (result.rows.length === 0) return next();
+            const track = result.rows[0];
+            title = track.title;
+            description = [track.artist, track.status].filter(Boolean).join(' - ');
+            imageUrl = track.cover_art_path ? `${baseUrl}${track.cover_art_path}` : null;
+            audioUrl = track.version_id ? `${baseUrl}/api/stream/${track.version_id}?token=${token}` : null;
+        } else {
+            const result = await pool.query(`
+                SELECT p.title, p.artist, p.type, p.cover_art_path,
+                       COUNT(pt.track_id) as track_count
+                FROM playlists p
+                LEFT JOIN playlist_tracks pt ON p.id = pt.playlist_id
+                WHERE p.share_token = $1 AND p.is_public = true
+                GROUP BY p.id
+            `, [token]);
+            if (result.rows.length === 0) return next();
+            const playlist = result.rows[0];
+            title = playlist.title;
+            description = [playlist.artist, `${playlist.track_count} tracks`, playlist.type].filter(Boolean).join(' - ');
+            imageUrl = playlist.cover_art_path ? `${baseUrl}${playlist.cover_art_path}` : null;
+        }
+
+        const ogHtml = `<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>${title} - SoundRaft</title>
+<meta property="og:title" content="${title}">
+<meta property="og:description" content="${description || 'Shared on SoundRaft'}">
+<meta property="og:type" content="${type === 'track' ? 'music.song' : 'music.playlist'}">
+<meta property="og:url" content="${baseUrl}/share/${type}/${token}">
+${imageUrl ? `<meta property="og:image" content="${imageUrl}">` : ''}
+${audioUrl ? `<meta property="og:audio" content="${audioUrl}">` : ''}
+<meta name="twitter:card" content="${imageUrl ? 'summary_large_image' : 'summary'}">
+<meta name="twitter:title" content="${title}">
+<meta name="twitter:description" content="${description || 'Shared on SoundRaft'}">
+${imageUrl ? `<meta name="twitter:image" content="${imageUrl}">` : ''}
+</head><body></body></html>`;
+        return res.send(ogHtml);
+    } catch (err) {
+        console.error('OG tag error:', err.message);
+        return next();
+    }
+}
+
 // --- Serve Built Frontend (production) ---
 const frontendPath = path.join(__dirname, 'public');
 if (fs.existsSync(frontendPath)) {
     app.use(express.static(frontendPath));
+
+    // OG meta tags for shared links (bots only)
+    app.get('/share/:type/:token', handleShareOgTags);
+
     // SPA fallback: serve index.html for any non-API route
     app.get('*', (req, res) => {
         if (!req.path.startsWith('/api/')) {
@@ -395,10 +567,10 @@ if (fs.existsSync(frontendPath)) {
 }
 
 // Export for route modules
-module.exports = { app, pool, minioClient, BUCKET_NAME };
+module.exports = { app, pool, minioClient, BUCKET_NAME, sanitizeText };
 
 // Start server
-initialize().then(() => {
+runMigrations().then(() => initialize()).then(() => {
     app.listen(PORT, () => {
         console.log(`SoundRaft API running on port ${PORT}`);
     });

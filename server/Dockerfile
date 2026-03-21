@@ -13,12 +13,15 @@ RUN npm run build
 FROM node:18-alpine
 WORKDIR /app
 
-# V14: Create non-root user for running the application
+# Install ffmpeg for audio processing (used by fluent-ffmpeg)
+RUN apk add --no-cache ffmpeg wget
+
+# Create non-root user for running the application
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
 
 # Install server dependencies
 COPY package*.json ./
-RUN npm ci --production
+RUN npm ci --production && npm cache clean --force
 
 # Copy server source
 COPY . .
@@ -26,8 +29,19 @@ COPY . .
 # Copy built frontend from stage 1
 COPY --from=frontend /app/dist ./public
 
-# V14: Run as non-root user
+# Create temp upload directory
+RUN mkdir -p /tmp/soundraft-uploads && chown nodejs:nodejs /tmp/soundraft-uploads
+
+# Run as non-root user
 USER nodejs
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget --spider -q http://localhost:8080/api/health || exit 1
+
+LABEL org.opencontainers.image.title="SoundRaft" \
+      org.opencontainers.image.description="Self-hosted audio versioning and sharing platform" \
+      org.opencontainers.image.source="https://github.com/jamie-bear/soundraft"
+
 CMD ["node", "index.js"]

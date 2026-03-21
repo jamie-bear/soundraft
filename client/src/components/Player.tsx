@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { usePlayerStore } from '../stores/playerStore'
 
 export default function Player() {
   const { currentTrack, queue, queueIndex, isPlaying, progress, volume, togglePlay, seek, setVolume, playNext, playPrevious } = usePlayerStore()
+  const [showVolume, setShowVolume] = useState(false)
 
   const hasNext = queue.length > 0 && queueIndex >= 0 && queueIndex < queue.length - 1
   const hasPrevious = queue.length > 0 && queueIndex > 0
@@ -42,8 +44,16 @@ export default function Player() {
             )}
           </div>
 
-          {/* Play controls (compact) */}
+          {/* Play controls (compact) + mobile volume toggle */}
           <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowVolume(!showVolume)}
+              className="flex h-11 w-11 items-center justify-center rounded-full active:bg-surface-700 text-surface-400 hover:text-white sm:hidden"
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+              </svg>
+            </button>
             <button
               onClick={playPrevious}
               disabled={!currentTrack}
@@ -80,21 +90,42 @@ export default function Player() {
           </div>
         </div>
 
-        {/* Bottom row: progress bar */}
+        {/* Mobile volume slider (toggle) */}
+        {showVolume && (
+          <div className="flex items-center gap-2 px-1 sm:hidden">
+            <svg className="h-4 w-4 text-surface-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+            </svg>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={volume}
+              onChange={(e) => setVolume(parseFloat(e.target.value))}
+              className="flex-1 h-1 bg-surface-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+              style={{ touchAction: 'none' }}
+            />
+          </div>
+        )}
+
+        {/* Bottom row: progress bar — larger touch target */}
         <div className="flex items-center gap-2">
           <span className="w-9 text-right text-xs text-surface-400 tabular-nums">
             {formatTime(progress * (currentTrack?.duration || 0))}
           </span>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.001"
-            value={progress}
-            onChange={(e) => seek(parseFloat(e.target.value))}
-            className="flex-1 h-1 bg-surface-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
-            disabled={!currentTrack}
-          />
+          <div className="flex-1 py-2" style={{ touchAction: 'none' }}>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.001"
+              value={progress}
+              onChange={(e) => seek(parseFloat(e.target.value))}
+              className="w-full h-1 bg-surface-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+              disabled={!currentTrack}
+            />
+          </div>
           <span className="w-9 text-xs text-surface-400 tabular-nums">
             {formatTime(currentTrack?.duration || 0)}
           </span>
