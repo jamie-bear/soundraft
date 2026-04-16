@@ -47,20 +47,13 @@ services:
   # Database
   db:
     image: postgres:15-alpine
-    # uid 70 = postgres user inside the alpine image.
-    # On NFS mounts, pre-set ownership on the host before first run so that
-    # the container can chmod its own files (NFS only blocks non-owner ops):
-    #   sudo chown -R 70:70 <PG_DATA_LOCATION>
-    #   sudo chmod 700 <PG_DATA_LOCATION>
-    # If using a non-NFS volume, remove the user line.
-    user: "${DB_UID:-70}:${DB_GID:-70}"
     restart: unless-stopped
     environment:
       - POSTGRES_USER=${DB_USER:-music_user}
       - POSTGRES_PASSWORD=${DB_PASSWORD:-music_pass}
       - POSTGRES_DB=${DB_NAME:-music_db}
     volumes:
-      - ${PG_DATA_LOCATION:-pg_data}:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/data
       - ./server/db/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-music_user} -d ${DB_NAME:-music_db}"]
