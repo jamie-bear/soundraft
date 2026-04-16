@@ -349,6 +349,13 @@ app.get('/api/storage/*', async (req, res) => {
         res.setHeader('Content-Security-Policy', 'sandbox');
 
         const dataStream = await minioClient.getObject(BUCKET_NAME, storageKey);
+        dataStream.on('error', (streamErr) => {
+            console.error('Storage stream error:', streamErr);
+            if (!res.headersSent) {
+                return res.status(500).send('Error fetching file');
+            }
+            res.destroy(streamErr);
+        });
         dataStream.pipe(res);
     } catch (err) {
         if (err.code === 'NoSuchKey') {
@@ -400,13 +407,50 @@ app.get('/api/stream/:versionId', optionalAuth, async (req, res) => {
 
         // 3. Handle Range Request (Seeking)
         if (range) {
-            const parts = range.replace(/bytes=/, "").split("-");
-            const start = parseInt(parts[0], 10);
-            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-            const chunksize = (end - start) + 1;
+            const rangeMatch = range.match(/bytes=(\d*)-(\d*)/);
+            if (!rangeMatch) {
+                return res.status(416).send('Invalid range');
+            }
+
+            const start = rangeMatch[1] === '' ? null : parseInt(rangeMatch[1], 10);
+            const end = rangeMatch[2] === '' ? null : parseInt(rangeMatch[2], 10);
+
+            if (
+                (start !== null && Number.isNaN(start)) ||
+                (end !== null && Number.isNaN(end))
+            ) {
+                return res.status(416).send('Invalid range');
+            }
+
+            let normalizedStart;
+            let normalizedEnd;
+
+            // Handle suffix byte ranges (e.g. bytes=-500)
+            if (start === null && end !== null) {
+                if (end <= 0) {
+                    return res.status(416).send('Invalid range');
+                }
+                normalizedStart = Math.max(fileSize - end, 0);
+                normalizedEnd = fileSize - 1;
+            } else {
+                normalizedStart = start ?? 0;
+                normalizedEnd = end ?? (fileSize - 1);
+            }
+
+            if (
+                normalizedStart < 0 ||
+                normalizedEnd < normalizedStart ||
+                normalizedStart >= fileSize
+            ) {
+                res.set('Content-Range', `bytes */${fileSize}`);
+                return res.status(416).send('Requested range not satisfiable');
+            }
+
+            normalizedEnd = Math.min(normalizedEnd, fileSize - 1);
+            const chunksize = (normalizedEnd - normalizedStart) + 1;
 
             const headers = {
-                'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+                'Content-Range': `bytes ${normalizedStart}-${normalizedEnd}/${fileSize}`,
                 'Accept-Ranges': 'bytes',
                 'Content-Length': chunksize,
                 'Content-Type': file.mime_type,
@@ -417,9 +461,16 @@ app.get('/api/stream/:versionId', optionalAuth, async (req, res) => {
             const dataStream = await minioClient.getPartialObject(
                 BUCKET_NAME,
                 file.storage_key,
-                start,
+                normalizedStart,
                 chunksize
             );
+            dataStream.on('error', (streamErr) => {
+                console.error("Partial stream error:", streamErr);
+                if (!res.headersSent) {
+                    return res.status(500).send('Error streaming audio');
+                }
+                res.destroy(streamErr);
+            });
             dataStream.pipe(res);
 
         } else {
@@ -430,6 +481,13 @@ app.get('/api/stream/:versionId', optionalAuth, async (req, res) => {
             };
             res.writeHead(200, headers);
             const dataStream = await minioClient.getObject(BUCKET_NAME, file.storage_key);
+            dataStream.on('error', (streamErr) => {
+                console.error("Full stream error:", streamErr);
+                if (!res.headersSent) {
+                    return res.status(500).send('Error streaming audio');
+                }
+                res.destroy(streamErr);
+            });
             dataStream.pipe(res);
         }
 
@@ -465,12 +523,22 @@ async function runMigrations() {
             );
             if (rows.length === 0) {
                 const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
-                await pool.query(sql);
-                await pool.query(
-                    'INSERT INTO schema_migrations (filename) VALUES ($1)',
-                    [file]
-                );
-                console.log(`Migration applied: ${file}`);
+                const client = await pool.connect();
+                try {
+                    await client.query('BEGIN');
+                    await client.query(sql);
+                    await client.query(
+                        'INSERT INTO schema_migrations (filename) VALUES ($1)',
+                        [file]
+                    );
+                    await client.query('COMMIT');
+                    console.log(`Migration applied: ${file}`);
+                } catch (migrationErr) {
+                    await client.query('ROLLBACK');
+                    throw migrationErr;
+                } finally {
+                    client.release();
+                }
             }
         }
     } catch (err) {
