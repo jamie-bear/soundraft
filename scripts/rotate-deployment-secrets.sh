@@ -14,12 +14,12 @@ command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
 command -v openssl >/dev/null 2>&1 || { echo "openssl is required" >&2; exit 1; }
 command -v node >/dev/null 2>&1 || { echo "node is required" >&2; exit 1; }
 
-set -a
-# The file is deployment-owned and expected to contain shell-safe values from
-# .env.example or rotate-local-secrets.js.
-. ./.env
-set +a
+read_env_value() {
+    sed -n "s/^$1=//p" .env | tail -n 1 | tr -d '\r'
+}
 
+DB_USER=$(read_env_value DB_USER)
+DB_NAME=$(read_env_value DB_NAME)
 DB_USER=${DB_USER:-soundraft}
 DB_NAME=${DB_NAME:-soundraft}
 
@@ -37,7 +37,16 @@ docker compose exec -T db psql \
     -U "$DB_USER" \
     -d "$DB_NAME" \
     -v ON_ERROR_STOP=1 \
-    -c "ALTER ROLE \"$DB_USER\" WITH PASSWORD '$NEW_DB_PASSWORD';"
+    -c "BEGIN;
+        ALTER ROLE \"$DB_USER\" WITH PASSWORD '$NEW_DB_PASSWORD';
+        UPDATE tracks
+        SET share_token = replace(uuid_generate_v4()::text, '-', ''),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE share_token IS NOT NULL;
+        UPDATE playlists
+        SET share_token = replace(uuid_generate_v4()::text, '-', '')
+        WHERE share_token IS NOT NULL;
+        COMMIT;"
 
 ROTATED_DB_PASSWORD=$NEW_DB_PASSWORD node - <<'NODE'
 'use strict';
@@ -70,4 +79,4 @@ unset ROTATED_DB_PASSWORD NEW_DB_PASSWORD
 
 echo "Recreating services with the new credentials..."
 docker compose up -d --force-recreate db storage api
-echo "Credential rotation complete. Existing sessions and share links are invalidated on API startup."
+echo "Credential rotation complete. Existing sessions and share links are invalidated."

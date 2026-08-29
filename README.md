@@ -65,9 +65,9 @@ all credentials together with:
 ```
 
 The script stops the API, changes the password of the existing PostgreSQL role,
-rotates the JWT, administrator, and MinIO credentials, then recreates the
-services. The next API startup also invalidates historical share links. Back up
-the database and object-storage directory before rotating a production system.
+invalidates share links, rotates the JWT, administrator, and MinIO credentials,
+then recreates the services. Back up the database and object-storage directory
+before rotating a production system.
 
 For a deployment that has not been started yet, rotate only the local `.env`
 values with `node scripts/rotate-local-secrets.js`.
