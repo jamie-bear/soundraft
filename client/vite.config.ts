@@ -1,10 +1,10 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
-import path from 'path'
+import { fileURLToPath } from 'node:url'
 
 export default defineConfig(({ mode }) => {
   // Load env from parent directory (where .env is located)
-  const env = loadEnv(mode, path.resolve(__dirname, '..'), '')
+  const env = loadEnv(mode, fileURLToPath(new URL('..', import.meta.url)), '')
 
   // Parse allowed hosts from env (comma-separated)
   const allowedHosts = env.VITE_ALLOWED_HOSTS
