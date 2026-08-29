@@ -22,8 +22,21 @@ if (KNOWN_DEV_SECRETS.includes(JWT_SECRET)) {
     );
 }
 
-// V3: Pin JWT algorithm to prevent "none" algorithm attacks
-const JWT_VERIFY_OPTIONS = { algorithms: ['HS256'] };
+// Session and resource-grant JWTs use the same signing key but are deliberately
+// non-interchangeable through audience, issuer, and token_type checks.
+const JWT_VERIFY_OPTIONS = {
+    algorithms: ['HS256'],
+    audience: 'soundraft-api',
+    issuer: 'soundraft',
+};
+
+function verifySession(token) {
+    const decoded = jwt.verify(token, JWT_SECRET, JWT_VERIFY_OPTIONS);
+    if (decoded.token_type !== 'SESSION' || !decoded.id) {
+        throw new Error('Invalid session token');
+    }
+    return decoded;
+}
 
 /**
  * Middleware: Require valid JWT token
@@ -39,7 +52,7 @@ function requireAuth(req, res, next) {
     const token = authHeader.split(' ')[1];
 
     try {
-        const decoded = jwt.verify(token, JWT_SECRET, JWT_VERIFY_OPTIONS);
+        const decoded = verifySession(token);
         req.user = decoded;
         next();
     } catch (err) {
@@ -73,7 +86,7 @@ function requireAuthWithQuery(req, res, next) {
     }
 
     try {
-        const decoded = jwt.verify(token, JWT_SECRET, JWT_VERIFY_OPTIONS);
+        const decoded = verifySession(token);
         req.user = decoded;
         next();
     } catch (err) {
@@ -96,7 +109,7 @@ function optionalAuth(req, res, next) {
     const token = authHeader.split(' ')[1];
 
     try {
-        const decoded = jwt.verify(token, JWT_SECRET, JWT_VERIFY_OPTIONS);
+        const decoded = verifySession(token);
         req.user = decoded;
     } catch (err) {
         req.user = null;
@@ -195,9 +208,14 @@ function requireOwnerForWrite(req, res, next) {
  */
 function generateToken(user) {
     return jwt.sign(
-        { id: user.id, email: user.email, role: user.role },
+        { id: user.id, email: user.email, role: user.role, token_type: 'SESSION' },
         JWT_SECRET,
-        { expiresIn: '7d' }
+        {
+            algorithm: 'HS256',
+            audience: 'soundraft-api',
+            issuer: 'soundraft',
+            expiresIn: '7d',
+        }
     );
 }
 

@@ -1,7 +1,10 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const { optionalAuth } = require('../middleware/auth');
+const { evaluateEntityAccess } = require('../lib/access');
 
 const router = express.Router();
+const VISITOR_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
 // Valid emoji types matching the 4 emojis from the spec
 const VALID_EMOJI_TYPES = ['heart', 'fire', 'laugh', 'cry'];
@@ -15,16 +18,45 @@ const reactionLimiter = rateLimit({
 });
 
 module.exports = function(pool) {
+    async function requireReactionAccess(entityType, entityId, user, shareToken) {
+        const table = entityType === 'track' ? 'tracks' : 'playlists';
+        const visibilityColumn = entityType === 'track' ? 'release_status' : 'is_public';
+        const result = await pool.query(
+            `SELECT id, owner_id, share_token, ${visibilityColumn} FROM ${table} WHERE id = $1`,
+            [entityId]
+        );
+
+        if (result.rows.length === 0) return { exists: false, allowed: false };
+        return {
+            exists: true,
+            ...evaluateEntityAccess({
+                resource: result.rows[0],
+                resourceType: entityType,
+                shareToken,
+                user,
+            }),
+        };
+    }
+
+    function rejectAccess(res, access, entityLabel) {
+        if (!access.exists) return res.status(404).json({ error: `${entityLabel} not found` });
+        return res.status(access.status || 403).json({ error: 'Access denied' });
+    }
     
     /**
      * GET /api/reactions/track/:trackId
      * Get reaction counts for a track
      * Also returns visitor's own reaction if visitorId provided
      */
-    router.get('/track/:trackId', async (req, res) => {
+    router.get('/track/:trackId', optionalAuth, async (req, res) => {
         try {
             const { trackId } = req.params;
-            const { visitorId } = req.query;
+            const { visitorId, token } = req.query;
+            if (visitorId && !VISITOR_ID_PATTERN.test(visitorId)) {
+                return res.status(400).json({ error: 'Invalid visitorId' });
+            }
+            const access = await requireReactionAccess('track', trackId, req.user, token);
+            if (!access.allowed) return rejectAccess(res, access, 'Track');
 
             // Get reaction counts by emoji type
             const countsResult = await pool.query(`
@@ -71,10 +103,15 @@ module.exports = function(pool) {
      * Get reaction counts for a playlist
      * Also returns visitor's own reaction if visitorId provided
      */
-    router.get('/playlist/:playlistId', async (req, res) => {
+    router.get('/playlist/:playlistId', optionalAuth, async (req, res) => {
         try {
             const { playlistId } = req.params;
-            const { visitorId } = req.query;
+            const { visitorId, token } = req.query;
+            if (visitorId && !VISITOR_ID_PATTERN.test(visitorId)) {
+                return res.status(400).json({ error: 'Invalid visitorId' });
+            }
+            const access = await requireReactionAccess('playlist', playlistId, req.user, token);
+            if (!access.allowed) return rejectAccess(res, access, 'Playlist');
 
             // Get reaction counts by emoji type
             const countsResult = await pool.query(`
@@ -121,10 +158,10 @@ module.exports = function(pool) {
      * Add or update a reaction to a track
      * Body: { visitorId, emojiType }
      */
-    router.post('/track/:trackId', reactionLimiter, async (req, res) => {
+    router.post('/track/:trackId', reactionLimiter, optionalAuth, async (req, res) => {
         try {
             const { trackId } = req.params;
-            const { visitorId, emojiType } = req.body;
+            const { visitorId, emojiType, token } = req.body;
 
             if (!visitorId || !emojiType) {
                 return res.status(400).json({ error: 'visitorId and emojiType are required' });
@@ -133,16 +170,12 @@ module.exports = function(pool) {
             if (!VALID_EMOJI_TYPES.includes(emojiType)) {
                 return res.status(400).json({ error: 'Invalid emoji type' });
             }
-
-            // Verify track exists
-            const track = await pool.query(
-                'SELECT id FROM tracks WHERE id = $1',
-                [trackId]
-            );
-
-            if (track.rows.length === 0) {
-                return res.status(404).json({ error: 'Track not found' });
+            if (!VISITOR_ID_PATTERN.test(visitorId)) {
+                return res.status(400).json({ error: 'Invalid visitorId' });
             }
+
+            const access = await requireReactionAccess('track', trackId, req.user, token);
+            if (!access.allowed) return rejectAccess(res, access, 'Track');
 
             // Upsert reaction (insert or update if visitor already reacted)
             await pool.query(`
@@ -164,10 +197,10 @@ module.exports = function(pool) {
      * Add or update a reaction to a playlist
      * Body: { visitorId, emojiType }
      */
-    router.post('/playlist/:playlistId', reactionLimiter, async (req, res) => {
+    router.post('/playlist/:playlistId', reactionLimiter, optionalAuth, async (req, res) => {
         try {
             const { playlistId } = req.params;
-            const { visitorId, emojiType } = req.body;
+            const { visitorId, emojiType, token } = req.body;
 
             if (!visitorId || !emojiType) {
                 return res.status(400).json({ error: 'visitorId and emojiType are required' });
@@ -176,16 +209,12 @@ module.exports = function(pool) {
             if (!VALID_EMOJI_TYPES.includes(emojiType)) {
                 return res.status(400).json({ error: 'Invalid emoji type' });
             }
-
-            // Verify playlist exists
-            const playlist = await pool.query(
-                'SELECT id FROM playlists WHERE id = $1',
-                [playlistId]
-            );
-
-            if (playlist.rows.length === 0) {
-                return res.status(404).json({ error: 'Playlist not found' });
+            if (!VISITOR_ID_PATTERN.test(visitorId)) {
+                return res.status(400).json({ error: 'Invalid visitorId' });
             }
+
+            const access = await requireReactionAccess('playlist', playlistId, req.user, token);
+            if (!access.allowed) return rejectAccess(res, access, 'Playlist');
 
             // Upsert reaction (insert or update if visitor already reacted)
             await pool.query(`
@@ -207,14 +236,19 @@ module.exports = function(pool) {
      * Remove a visitor's reaction from a track
      * Body: { visitorId }
      */
-    router.delete('/track/:trackId', async (req, res) => {
+    router.delete('/track/:trackId', reactionLimiter, optionalAuth, async (req, res) => {
         try {
             const { trackId } = req.params;
-            const { visitorId } = req.body;
+            const { visitorId, token } = req.body;
 
             if (!visitorId) {
                 return res.status(400).json({ error: 'visitorId is required' });
             }
+            if (!VISITOR_ID_PATTERN.test(visitorId)) {
+                return res.status(400).json({ error: 'Invalid visitorId' });
+            }
+            const access = await requireReactionAccess('track', trackId, req.user, token);
+            if (!access.allowed) return rejectAccess(res, access, 'Track');
 
             await pool.query(`
                 DELETE FROM reactions
@@ -233,14 +267,19 @@ module.exports = function(pool) {
      * Remove a visitor's reaction from a playlist
      * Body: { visitorId }
      */
-    router.delete('/playlist/:playlistId', async (req, res) => {
+    router.delete('/playlist/:playlistId', reactionLimiter, optionalAuth, async (req, res) => {
         try {
             const { playlistId } = req.params;
-            const { visitorId } = req.body;
+            const { visitorId, token } = req.body;
 
             if (!visitorId) {
                 return res.status(400).json({ error: 'visitorId is required' });
             }
+            if (!VISITOR_ID_PATTERN.test(visitorId)) {
+                return res.status(400).json({ error: 'Invalid visitorId' });
+            }
+            const access = await requireReactionAccess('playlist', playlistId, req.user, token);
+            if (!access.allowed) return rejectAccess(res, access, 'Playlist');
 
             await pool.query(`
                 DELETE FROM reactions

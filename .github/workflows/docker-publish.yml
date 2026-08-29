@@ -14,7 +14,20 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  audit:
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan repository for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  quality:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -23,19 +36,31 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '24'
 
-      - name: Audit server dependencies
+      - name: Install server dependencies
         working-directory: ./server
-        run: npm audit --audit-level=high || true
+        run: npm ci
 
-      - name: Audit client dependencies
+      - name: Test and audit server
+        working-directory: ./server
+        run: |
+          npm test
+          npm audit --audit-level=high
+
+      - name: Install client dependencies
         working-directory: ./client
-        run: npm audit --audit-level=high || true
+        run: npm ci
+
+      - name: Build and audit client
+        working-directory: ./client
+        run: |
+          npm run build
+          npm audit --audit-level=high
 
   build:
     runs-on: ubuntu-latest
-    needs: audit
+    needs: [secrets, quality]
     permissions:
       contents: read
       packages: write

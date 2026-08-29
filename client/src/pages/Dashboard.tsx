@@ -52,7 +52,7 @@ export default function Dashboard() {
     e.preventDefault()
     e.stopPropagation()
     
-    if (!track.current_version_id) return
+    if (!track.current_version_id || !track.stream_url) return
 
     const isCurrentTrack = currentTrack?.id === track.id
 
@@ -63,6 +63,7 @@ export default function Dashboard() {
         id: track.id,
         title: track.title,
         versionId: track.current_version_id,
+        streamUrl: track.stream_url,
         version: track.current_version_number || 1,
         duration: track.duration_seconds || 0,
       })

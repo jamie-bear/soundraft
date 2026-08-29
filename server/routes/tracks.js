@@ -1,10 +1,11 @@
 const express = require('express');
-const { v4: uuidv4 } = require('uuid');
-const mm = require('music-metadata');
+const crypto = require('crypto');
 const fs = require('fs');
 const rateLimit = require('express-rate-limit');
-const { requireAuth, requireAuthWithQuery, optionalAuth, checkShareAccess } = require('../middleware/auth');
-const { sanitizeText } = require('../index');
+const { requireAuth, requireAuthWithQuery, optionalAuth } = require('../middleware/auth');
+const { sanitizeText } = require('../lib/text');
+const { evaluateResourceAccess, isUuid } = require('../lib/access');
+const { addResourceUrls, streamUrl } = require('../lib/grants');
 
 const router = express.Router();
 
@@ -35,7 +36,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 ORDER BY t.updated_at DESC
             `, [req.user.id]);
 
-            res.json({ tracks: result.rows });
+            res.json({ tracks: result.rows.map(addResourceUrls) });
         } catch (err) {
             console.error('List tracks error:', err);
             res.status(500).json({ error: 'Failed to list tracks' });
@@ -50,20 +51,21 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
         try {
             const { title, artist, status = 'WIP', type = 'RELEASE' } = req.body;
 
-            if (!title) {
+            const sanitizedTitle = sanitizeText(title);
+            if (!sanitizedTitle) {
                 return res.status(400).json({ error: 'Title is required' });
             }
 
             // Generate share token
-            const shareToken = uuidv4().replace(/-/g, '');
+            const shareToken = crypto.randomBytes(16).toString('hex');
 
             const result = await pool.query(`
                 INSERT INTO tracks (owner_id, title, artist, status, type, share_token)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING *
-            `, [req.user.id, sanitizeText(title), sanitizeText(artist), status, type, shareToken]);
+            `, [req.user.id, sanitizedTitle, sanitizeText(artist), status, type, shareToken]);
 
-            res.status(201).json({ track: result.rows[0] });
+            res.status(201).json({ track: addResourceUrls(result.rows[0]) });
         } catch (err) {
             console.error('Create track error:', err);
             res.status(500).json({ error: 'Failed to create track' });
@@ -80,31 +82,27 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             const { id } = req.params;
             const { token } = req.query;
 
-            // Check if id looks like a UUID or a share token
-            const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
-            
-            let result;
-            if (isUUID) {
-                result = await pool.query(`
-                    SELECT t.*, 
-                           tv.duration_seconds,
-                           tv.version_number as current_version_number,
-                           tv.filename as current_filename
-                    FROM tracks t
-                    LEFT JOIN track_versions tv ON t.current_version_id = tv.id
-                    WHERE t.id = $1
-                `, [id]);
-            } else {
-                // Look up by share_token
-                result = await pool.query(`
-                    SELECT t.*, 
-                           tv.duration_seconds,
-                           tv.version_number as current_version_number,
-                           tv.filename as current_filename
-                    FROM tracks t
-                    LEFT JOIN track_versions tv ON t.current_version_id = tv.id
-                    WHERE t.share_token = $1
-                `, [id]);
+            const trackQuery = `
+                SELECT t.*,
+                       tv.duration_seconds,
+                       tv.version_number as current_version_number,
+                       tv.filename as current_filename
+                FROM tracks t
+                LEFT JOIN track_versions tv ON t.current_version_id = tv.id
+                WHERE %COLUMN% = $1
+            `;
+            let result = await pool.query(
+                trackQuery.replace('%COLUMN%', isUuid(id) ? 't.id' : 't.share_token'),
+                [id]
+            );
+
+            // Older installations may have UUID-shaped share tokens. Preserve
+            // indexed ID lookups, then fall back to the indexed token column.
+            if (result.rows.length === 0 && isUuid(id)) {
+                result = await pool.query(
+                    trackQuery.replace('%COLUMN%', 't.share_token'),
+                    [id]
+                );
             }
 
             if (result.rows.length === 0) {
@@ -113,44 +111,24 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
 
             const track = result.rows[0];
 
-            // Check access
-            const isOwner = req.user && req.user.id === track.owner_id;
-            // For share token lookups, the token in URL serves as validation
-            const hasValidToken = !isUUID || (token && token === track.share_token);
-            const isPublic = track.release_status === 'PUBLIC';
-            const isPrivate = track.release_status === 'PRIVATE';
+            const access = evaluateResourceAccess({
+                resource: track,
+                resourceType: 'track',
+                identifier: id,
+                queryToken: token,
+                user: req.user,
+            });
 
-            // Access Logic:
-            // 1. Owner always has access
-            // 2. Public tracks: Accessible if hasValidToken (or if we allow public browsing without token, but here token is key for shared links)
-            //    Actually, if isPublic, we might allow access even without token if we implement a public feed, but for /:id endpoint:
-            //    If accessed via UUID, isPublic should probably allow it? 
-            //    The current logic `!isUUID || (token ...)` implies UUID access requires token unless isOwner?
-            //    Wait, `hasValidToken` is true if `!isUUID` (accessed via /share/token route logic in frontend calling API with token as ID?).
-            //    Actually API `/:id` handles both.
-            
-            // New Requirement: Private tracks require login.
-            
-            if (!isOwner) {
-                // If accessed via UUID and no token provided, deny (unless public? logic below handles it)
-                
-                // If Private, strictly require authentication
-                if (isPrivate && !req.user) {
-                    return res.status(401).json({ error: 'Authentication required' });
-                }
-
-                // General access check
-                if (!hasValidToken && !isPublic) {
-                    return res.status(403).json({ error: 'Access denied' });
-                }
+            if (!access.allowed) {
+                return res.status(access.status).json({ error: 'Access denied' });
             }
 
             // Remove sensitive fields for non-owners
-            if (!isOwner) {
+            if (!access.isOwner) {
                 delete track.share_token;
             }
 
-            res.json({ track, isOwner });
+            res.json({ track: addResourceUrls(track), isOwner: access.isOwner });
         } catch (err) {
             console.error('Get track error:', err);
             res.status(500).json({ error: 'Failed to get track' });
@@ -193,7 +171,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 RETURNING *
             `, [title ? sanitizeText(title) : null, artist ? sanitizeText(artist) : null, status, type, release_status, comment_access, id]);
 
-            res.json({ track: result.rows[0] });
+            res.json({ track: addResourceUrls(result.rows[0]) });
         } catch (err) {
             console.error('Update track error:', err);
             res.status(500).json({ error: 'Failed to update track' });
@@ -340,7 +318,8 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             // Extract duration using music-metadata
             let durationSeconds = 0;
             try {
-                const metadata = await mm.parseFile(req.file.path);
+                const { parseFile } = await import('music-metadata');
+                const metadata = await parseFile(req.file.path);
                 if (metadata.format.duration) {
                     durationSeconds = Math.round(metadata.format.duration);
                 }
@@ -366,7 +345,12 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 [newVersion.id, id]
             );
 
-            res.status(201).json({ version: newVersion });
+            res.status(201).json({
+                version: {
+                    ...newVersion,
+                    stream_url: streamUrl(newVersion.id),
+                },
+            });
         } catch (err) {
             // Clean up temp file on error
             if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
@@ -399,7 +383,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             }
 
             // Generate new share token
-            const shareToken = uuidv4().replace(/-/g, '');
+            const shareToken = crypto.randomBytes(16).toString('hex');
             
             const result = await pool.query(`
                 UPDATE tracks 
@@ -506,7 +490,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 RETURNING *
             `, [versionId, trackId]);
 
-            res.json({ track: result.rows[0] });
+            res.json({ track: addResourceUrls(result.rows[0]) });
         } catch (err) {
             console.error('Activate version error:', err);
             res.status(500).json({ error: 'Failed to activate version' });
@@ -717,7 +701,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 RETURNING *
             `, [coverArtPath, id]);
 
-            res.json({ track: result.rows[0] });
+            res.json({ track: addResourceUrls(result.rows[0]) });
         } catch (err) {
             console.error('Upload cover art error:', err);
             res.status(500).json({ error: 'Failed to upload cover art' });
@@ -765,7 +749,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 RETURNING *
             `, [id]);
 
-            res.json({ track: result.rows[0] });
+            res.json({ track: addResourceUrls(result.rows[0]) });
         } catch (err) {
             console.error('Delete cover art error:', err);
             res.status(500).json({ error: 'Failed to delete cover art' });

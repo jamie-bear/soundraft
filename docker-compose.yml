@@ -15,16 +15,19 @@ services:
       storage:
         condition: service_healthy
     environment:
+      NODE_ENV: production
       PORT: 8080
-      DATABASE_URL: postgresql://${DB_USER:-soundraft}:${DB_PASSWORD:-soundraft}@db:5432/${DB_NAME:-soundraft}
-      JWT_SECRET: ${JWT_SECRET:-dev_secret_change_me}
+      DATABASE_URL: postgresql://${DB_USER:-soundraft}:${DB_PASSWORD:?Set DB_PASSWORD in .env}@db:5432/${DB_NAME:-soundraft}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       S3_ENDPOINT: http://storage:9000
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY in .env}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}
       S3_BUCKET: ${S3_BUCKET:-tracks}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
       CORS_ORIGIN: ${CORS_ORIGIN:-}
+      RESOURCE_GRANT_TTL: ${RESOURCE_GRANT_TTL:-1h}
+      SEED_EXAMPLE_CONTENT: ${SEED_EXAMPLE_CONTENT:-false}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/health"]
       interval: 10s
@@ -50,7 +53,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER:-soundraft}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-soundraft}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
       POSTGRES_DB: ${DB_NAME:-soundraft}
     volumes:
       # Keep DB files in a user-friendly host location by default.
@@ -80,8 +83,8 @@ services:
     command: server /data --console-address ":9001"
     restart: unless-stopped
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY in .env}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}
     volumes:
       # Keep uploaded files in a user-friendly host location by default.
       # You can also set UPLOADS_LOCATION=minio_data to use a Docker named volume.

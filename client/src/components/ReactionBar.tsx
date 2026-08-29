@@ -4,6 +4,7 @@ import { reactionsApi, ReactionCounts, EmojiType } from '../lib/api'
 interface ReactionBarProps {
   entityType: 'track' | 'playlist'
   entityId: string
+  shareToken?: string
 }
 
 // Emoji definitions matching the Unicode spec from the screenshot
@@ -14,7 +15,7 @@ const EMOJIS: { type: EmojiType; emoji: string; label: string }[] = [
   { type: 'cry', emoji: '\uD83D\uDE2D', label: 'Loudly Crying Face' }, // U+1F62D - Loudly Crying Face
 ]
 
-export default function ReactionBar({ entityType, entityId }: ReactionBarProps) {
+export default function ReactionBar({ entityType, entityId, shareToken }: ReactionBarProps) {
   const [counts, setCounts] = useState<ReactionCounts>({
     heart: 0,
     fire: 0,
@@ -29,15 +30,15 @@ export default function ReactionBar({ entityType, entityId }: ReactionBarProps) 
 
   useEffect(() => {
     loadReactions()
-  }, [entityId, entityType])
+  }, [entityId, entityType, shareToken])
 
   const loadReactions = async () => {
     try {
       setLoading(true)
       const { counts: reactionCounts, visitorReaction } =
         entityType === 'track'
-          ? await reactionsApi.getTrackReactions(entityId, visitorId)
-          : await reactionsApi.getPlaylistReactions(entityId, visitorId)
+          ? await reactionsApi.getTrackReactions(entityId, visitorId, shareToken)
+          : await reactionsApi.getPlaylistReactions(entityId, visitorId, shareToken)
 
       setCounts(reactionCounts)
       setMyReaction(visitorReaction)
@@ -57,9 +58,9 @@ export default function ReactionBar({ entityType, entityId }: ReactionBarProps) 
       // If clicking the same reaction, remove it
       if (myReaction === emojiType) {
         if (entityType === 'track') {
-          await reactionsApi.removeTrackReaction(entityId, visitorId)
+          await reactionsApi.removeTrackReaction(entityId, visitorId, shareToken)
         } else {
-          await reactionsApi.removePlaylistReaction(entityId, visitorId)
+          await reactionsApi.removePlaylistReaction(entityId, visitorId, shareToken)
         }
         // Optimistic update: decrement the old reaction
         setCounts((prev) => ({
@@ -70,9 +71,9 @@ export default function ReactionBar({ entityType, entityId }: ReactionBarProps) 
       } else {
         // Adding a new reaction (or changing)
         if (entityType === 'track') {
-          await reactionsApi.addTrackReaction(entityId, emojiType, visitorId)
+          await reactionsApi.addTrackReaction(entityId, emojiType, visitorId, shareToken)
         } else {
-          await reactionsApi.addPlaylistReaction(entityId, emojiType, visitorId)
+          await reactionsApi.addPlaylistReaction(entityId, emojiType, visitorId, shareToken)
         }
         // Optimistic update
         setCounts((prev) => {

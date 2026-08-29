@@ -1,5 +1,5 @@
 # Stage 1: Build the React frontend
-FROM node:18-alpine AS frontend
+FROM node:24-alpine AS frontend
 WORKDIR /app
 COPY client/package*.json ./
 RUN npm ci
@@ -8,7 +8,7 @@ RUN npm run build
 # Output: /app/dist/
 
 # Stage 2: Production API server
-FROM node:18-alpine
+FROM node:24-alpine
 WORKDIR /app
 
 # Create non-root user for running the application

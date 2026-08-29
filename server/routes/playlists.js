@@ -1,9 +1,11 @@
 const express = require('express');
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const fs = require('fs');
 const rateLimit = require('express-rate-limit');
 const { requireAuth, optionalAuth } = require('../middleware/auth');
-const { sanitizeText } = require('../index');
+const { sanitizeText } = require('../lib/text');
+const { evaluateResourceAccess, isUuid } = require('../lib/access');
+const { addResourceUrls } = require('../lib/grants');
 
 const router = express.Router();
 
@@ -55,7 +57,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             }
             
             const result = await pool.query(query, params);
-            res.json({ playlists: result.rows });
+            res.json({ playlists: result.rows.map(addResourceUrls) });
         } catch (err) {
             console.error('List playlists error:', err);
             res.status(500).json({ error: 'Failed to list playlists' });
@@ -70,19 +72,20 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
         try {
             const { title, artist, type = 'PLAYLIST' } = req.body;
 
-            if (!title) {
+            const sanitizedTitle = sanitizeText(title);
+            if (!sanitizedTitle) {
                 return res.status(400).json({ error: 'Title is required' });
             }
 
-            const shareToken = uuidv4().replace(/-/g, '');
+            const shareToken = crypto.randomBytes(16).toString('hex');
 
             const result = await pool.query(`
                 INSERT INTO playlists (owner_id, title, artist, type, share_token)
                 VALUES ($1, $2, $3, $4, $5)
                 RETURNING *
-            `, [req.user.id, sanitizeText(title), sanitizeText(artist), type, shareToken]);
+            `, [req.user.id, sanitizedTitle, sanitizeText(artist), type, shareToken]);
 
-            res.status(201).json({ playlist: result.rows[0] });
+            res.status(201).json({ playlist: addResourceUrls(result.rows[0]) });
         } catch (err) {
             console.error('Create playlist error:', err);
             res.status(500).json({ error: 'Failed to create playlist' });
@@ -99,17 +102,14 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             const { id } = req.params;
             const { token } = req.query;
 
-            // Check if id looks like a UUID or a share token
-            const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+            let playlistResult = await pool.query(
+                `SELECT * FROM playlists WHERE ${isUuid(id) ? 'id' : 'share_token'} = $1`,
+                [id]
+            );
 
-            let playlistResult;
-            if (isUUID) {
-                playlistResult = await pool.query(
-                    'SELECT * FROM playlists WHERE id = $1',
-                    [id]
-                );
-            } else {
-                // Look up by share_token
+            // Older installations may have UUID-shaped share tokens. Preserve
+            // indexed ID lookups, then fall back to the indexed token column.
+            if (playlistResult.rows.length === 0 && isUuid(id)) {
                 playlistResult = await pool.query(
                     'SELECT * FROM playlists WHERE share_token = $1',
                     [id]
@@ -122,22 +122,16 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
 
             const playlist = playlistResult.rows[0];
 
-            // Check access
-            const isOwner = req.user && req.user.id === playlist.owner_id;
-            // For share token lookups, the token in URL serves as validation
-            const hasValidToken = !isUUID || (token && token === playlist.share_token);
-            const isPublic = playlist.is_public;
-            
-            // New Requirement: Private playlists require login.
-            if (!isOwner) {
-                // If Private (not public), strictly require authentication
-                if (!isPublic && !req.user) {
-                    return res.status(401).json({ error: 'Authentication required' });
-                }
+            const access = evaluateResourceAccess({
+                resource: playlist,
+                resourceType: 'playlist',
+                identifier: id,
+                queryToken: token,
+                user: req.user,
+            });
 
-                if (!hasValidToken && !isPublic) {
-                    return res.status(403).json({ error: 'Access denied' });
-                }
+            if (!access.allowed) {
+                return res.status(access.status).json({ error: 'Access denied' });
             }
 
             // Get tracks with order (use playlist.id, not the param id)
@@ -153,14 +147,14 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 ORDER BY pt.sort_order ASC
             `, [playlist.id]);
 
-            if (!isOwner) {
+            if (!access.isOwner) {
                 delete playlist.share_token;
             }
 
             res.json({ 
-                playlist,
-                tracks: tracksResult.rows,
-                isOwner
+                playlist: addResourceUrls(playlist),
+                tracks: tracksResult.rows.map(addResourceUrls),
+                isOwner: access.isOwner,
             });
         } catch (err) {
             console.error('Get playlist error:', err);
@@ -202,7 +196,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 RETURNING *
             `, [title ? sanitizeText(title) : null, artist ? sanitizeText(artist) : null, type, is_public, comment_access, id]);
 
-            res.json({ playlist: result.rows[0] });
+            res.json({ playlist: addResourceUrls(result.rows[0]) });
         } catch (err) {
             console.error('Update playlist error:', err);
             res.status(500).json({ error: 'Failed to update playlist' });
@@ -410,7 +404,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             await client.query('BEGIN');
 
             // Create new playlist
-            const shareToken = uuidv4().replace(/-/g, '');
+            const shareToken = crypto.randomBytes(16).toString('hex');
             const newPlaylist = await client.query(`
                 INSERT INTO playlists (owner_id, title, type, share_token)
                 VALUES ($1, $2, $3, $4)
@@ -427,7 +421,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
 
             await client.query('COMMIT');
 
-            res.status(201).json({ playlist: newPlaylist.rows[0] });
+            res.status(201).json({ playlist: addResourceUrls(newPlaylist.rows[0]) });
         } catch (err) {
             await client.query('ROLLBACK');
             console.error('Duplicate playlist error:', err);
@@ -517,7 +511,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 RETURNING *
             `, [coverArtPath, id]);
 
-            res.json({ playlist: result.rows[0] });
+            res.json({ playlist: addResourceUrls(result.rows[0]) });
         } catch (err) {
             console.error('Upload cover art error:', err);
             res.status(500).json({ error: 'Failed to upload cover art' });
@@ -565,7 +559,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 RETURNING *
             `, [id]);
 
-            res.json({ playlist: result.rows[0] });
+            res.json({ playlist: addResourceUrls(result.rows[0]) });
         } catch (err) {
             console.error('Delete cover art error:', err);
             res.status(500).json({ error: 'Failed to delete cover art' });
@@ -596,7 +590,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             }
 
             // Generate new share token
-            const shareToken = uuidv4().replace(/-/g, '');
+            const shareToken = crypto.randomBytes(16).toString('hex');
             
             const result = await pool.query(`
                 UPDATE playlists 

@@ -317,7 +317,6 @@ export const commentsApi = {
     request<{ comment: Comment }>(`/comments/track/${trackId}`, {
       method: 'POST',
       body: JSON.stringify({ body, audioTimestamp, token }),
-      auth: !token,
     }),
 
   // Playlist comments
@@ -330,7 +329,6 @@ export const commentsApi = {
     request<{ comment: Comment }>(`/comments/playlist/${playlistId}`, {
       method: 'POST',
       body: JSON.stringify({ body, token }),
-      auth: !token,
     }),
 
   // Delete (works for both)
@@ -479,6 +477,7 @@ export interface Track {
   comment_access: 'PRIVATE' | 'PUBLIC_VIEW' | 'PUBLIC_FULL'
   cover_art_path?: string
   current_version_id?: string
+  stream_url?: string
   share_token?: string
   duration_seconds?: number
   current_version_number?: number
@@ -496,6 +495,7 @@ export interface TrackVersion {
   size_bytes: number
   duration_seconds: number
   created_at: string
+  stream_url?: string
 }
 
 export interface Playlist {
@@ -554,45 +554,45 @@ export const reactionsApi = {
   },
 
   // Track reactions
-  getTrackReactions: (trackId: string, visitorId?: string) =>
+  getTrackReactions: (trackId: string, visitorId?: string, token?: string) =>
     request<{ counts: ReactionCounts; visitorReaction: EmojiType | null }>(
-      `/reactions/track/${trackId}${visitorId ? `?visitorId=${visitorId}` : ''}`,
-      { auth: false }
+      `/reactions/track/${trackId}?${new URLSearchParams({
+        ...(visitorId ? { visitorId } : {}),
+        ...(token ? { token } : {}),
+      }).toString()}`
     ),
 
-  addTrackReaction: (trackId: string, emojiType: EmojiType, visitorId: string) =>
+  addTrackReaction: (trackId: string, emojiType: EmojiType, visitorId: string, token?: string) =>
     request<{ success: boolean; emojiType: EmojiType }>(`/reactions/track/${trackId}`, {
       method: 'POST',
-      body: JSON.stringify({ visitorId, emojiType }),
-      auth: false,
+      body: JSON.stringify({ visitorId, emojiType, token }),
     }),
 
-  removeTrackReaction: (trackId: string, visitorId: string) =>
+  removeTrackReaction: (trackId: string, visitorId: string, token?: string) =>
     request<{ success: boolean }>(`/reactions/track/${trackId}`, {
       method: 'DELETE',
-      body: JSON.stringify({ visitorId }),
-      auth: false,
+      body: JSON.stringify({ visitorId, token }),
     }),
 
   // Playlist reactions
-  getPlaylistReactions: (playlistId: string, visitorId?: string) =>
+  getPlaylistReactions: (playlistId: string, visitorId?: string, token?: string) =>
     request<{ counts: ReactionCounts; visitorReaction: EmojiType | null }>(
-      `/reactions/playlist/${playlistId}${visitorId ? `?visitorId=${visitorId}` : ''}`,
-      { auth: false }
+      `/reactions/playlist/${playlistId}?${new URLSearchParams({
+        ...(visitorId ? { visitorId } : {}),
+        ...(token ? { token } : {}),
+      }).toString()}`
     ),
 
-  addPlaylistReaction: (playlistId: string, emojiType: EmojiType, visitorId: string) =>
+  addPlaylistReaction: (playlistId: string, emojiType: EmojiType, visitorId: string, token?: string) =>
     request<{ success: boolean; emojiType: EmojiType }>(`/reactions/playlist/${playlistId}`, {
       method: 'POST',
-      body: JSON.stringify({ visitorId, emojiType }),
-      auth: false,
+      body: JSON.stringify({ visitorId, emojiType, token }),
     }),
 
-  removePlaylistReaction: (playlistId: string, visitorId: string) =>
+  removePlaylistReaction: (playlistId: string, visitorId: string, token?: string) =>
     request<{ success: boolean }>(`/reactions/playlist/${playlistId}`, {
       method: 'DELETE',
-      body: JSON.stringify({ visitorId }),
-      auth: false,
+      body: JSON.stringify({ visitorId, token }),
     }),
 }
 

@@ -1,7 +1,8 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { requireAuth, optionalAuth } = require('../middleware/auth');
-const { sanitizeText } = require('../index');
+const { sanitizeText } = require('../lib/text');
+const { evaluateEntityAccess } = require('../lib/access');
 
 const router = express.Router();
 
@@ -21,8 +22,9 @@ module.exports = function(pool) {
      */
     async function checkCommentAccess(entityType, entityId, userId, shareToken) {
         const table = entityType === 'track' ? 'tracks' : 'playlists';
+        const visibilityColumn = entityType === 'track' ? 'release_status' : 'is_public';
         const result = await pool.query(
-            `SELECT owner_id, share_token, comment_access FROM ${table} WHERE id = $1`,
+            `SELECT id, owner_id, share_token, comment_access, ${visibilityColumn} FROM ${table} WHERE id = $1`,
             [entityId]
         );
 
@@ -31,13 +33,22 @@ module.exports = function(pool) {
         }
 
         const entity = result.rows[0];
-        const isOwner = userId && userId === entity.owner_id;
-        const hasValidToken = shareToken && shareToken === entity.share_token;
+        const resourceAccess = evaluateEntityAccess({
+            resource: entity,
+            resourceType: entityType,
+            shareToken,
+            user: userId ? { id: userId } : null,
+        });
+        const isOwner = resourceAccess.isOwner;
         const commentAccess = entity.comment_access || 'PRIVATE';
 
         // Owner can always view and post
         if (isOwner) {
             return { exists: true, canView: true, canPost: true, isOwner: true };
+        }
+
+        if (!resourceAccess.allowed) {
+            return { exists: true, canView: false, canPost: false, isOwner: false };
         }
 
         // Check access based on comment_access setting
@@ -49,7 +60,7 @@ module.exports = function(pool) {
                 // Anyone with token can view, only owner can post
                 return { 
                     exists: true, 
-                    canView: hasValidToken, 
+                    canView: true,
                     canPost: false, 
                     isOwner: false 
                 };
@@ -57,8 +68,8 @@ module.exports = function(pool) {
                 // Anyone with token can view, only signed-in users can post
                 return { 
                     exists: true, 
-                    canView: hasValidToken, 
-                    canPost: hasValidToken && !!userId, 
+                    canView: true,
+                    canPost: !!userId,
                     isOwner: false 
                 };
             default:
@@ -117,8 +128,19 @@ module.exports = function(pool) {
             const { trackId } = req.params;
             const { body, audioTimestamp, token } = req.body;
 
-            if (!body || body.trim().length === 0) {
+            const sanitizedBody = sanitizeText(body);
+            if (!sanitizedBody) {
                 return res.status(400).json({ error: 'Comment body is required' });
+            }
+            if (sanitizedBody.length > 10000) {
+                return res.status(400).json({ error: 'Comment body must be 10000 characters or fewer' });
+            }
+            if (
+                audioTimestamp !== undefined &&
+                audioTimestamp !== null &&
+                (!Number.isFinite(audioTimestamp) || audioTimestamp < 0)
+            ) {
+                return res.status(400).json({ error: 'audioTimestamp must be a non-negative number' });
             }
 
             const access = await checkCommentAccess('track', trackId, req.user?.id, token);
@@ -135,7 +157,7 @@ module.exports = function(pool) {
                 INSERT INTO comments (user_id, track_id, body, audio_timestamp)
                 VALUES ($1, $2, $3, $4)
                 RETURNING id, body, audio_timestamp, created_at
-            `, [req.user?.id || null, trackId, sanitizeText(body), audioTimestamp || null]);
+            `, [req.user?.id || null, trackId, sanitizedBody, audioTimestamp ?? null]);
 
             const comment = result.rows[0];
             
@@ -202,8 +224,12 @@ module.exports = function(pool) {
             const { playlistId } = req.params;
             const { body, token } = req.body;
 
-            if (!body || body.trim().length === 0) {
+            const sanitizedBody = sanitizeText(body);
+            if (!sanitizedBody) {
                 return res.status(400).json({ error: 'Comment body is required' });
+            }
+            if (sanitizedBody.length > 10000) {
+                return res.status(400).json({ error: 'Comment body must be 10000 characters or fewer' });
             }
 
             const access = await checkCommentAccess('playlist', playlistId, req.user?.id, token);
@@ -220,7 +246,7 @@ module.exports = function(pool) {
                 INSERT INTO comments (user_id, playlist_id, body)
                 VALUES ($1, $2, $3)
                 RETURNING id, body, created_at
-            `, [req.user?.id || null, playlistId, sanitizeText(body)]);
+            `, [req.user?.id || null, playlistId, sanitizedBody]);
 
             const comment = result.rows[0];
             

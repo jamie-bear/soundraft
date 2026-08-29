@@ -1,7 +1,7 @@
 # Stage 1: Build the React frontend
 # 'client-build' is an additional context defined in docker-compose.yml
 # pointing to the ./client directory
-FROM node:18-alpine AS frontend
+FROM node:24-alpine AS frontend
 WORKDIR /app
 COPY --from=client-build package*.json ./
 RUN npm ci
@@ -10,11 +10,11 @@ RUN npm run build
 # Output: /app/dist/
 
 # Stage 2: Production API server
-FROM node:18-alpine
+FROM node:24-alpine
 WORKDIR /app
 
-# Install ffmpeg for audio processing (used by fluent-ffmpeg)
-RUN apk add --no-cache ffmpeg wget
+# wget is used by the container health check.
+RUN apk add --no-cache wget
 
 # Create non-root user for running the application
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001

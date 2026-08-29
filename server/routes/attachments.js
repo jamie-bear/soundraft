@@ -1,7 +1,18 @@
 const express = require('express');
+const fs = require('fs');
+const rateLimit = require('express-rate-limit');
 const { requireAuth, requireAuthWithQuery } = require('../middleware/auth');
+const { sanitizeText } = require('../lib/text');
 
 const router = express.Router();
+
+const attachmentUploadLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many attachment uploads. Please wait a moment.' },
+});
 
 // V9: Dangerous file extensions that could enable XSS or code execution
 const BLOCKED_EXTENSIONS = new Set([
@@ -13,6 +24,21 @@ const BLOCKED_EXTENSIONS = new Set([
 ]);
 
 module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
+    async function removeTempFile(file) {
+        if (!file?.path) return;
+        try {
+            await fs.promises.unlink(file.path);
+        } catch (err) {
+            if (err.code !== 'ENOENT') {
+                console.error('Attachment temp cleanup error:', err.message);
+            }
+        }
+    }
+
+    function attachmentDisposition(filename) {
+        const fallback = filename.replace(/[^a-zA-Z0-9._ -]/g, '_').replace(/["\\]/g, '_');
+        return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+    }
 
     /**
      * GET /api/attachments/track/:trackId
@@ -55,7 +81,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
      * POST /api/attachments/track/:trackId
      * Upload an attachment (OWNER ONLY)
      */
-    router.post('/track/:trackId', requireAuth, upload.single('file'), async (req, res) => {
+    router.post('/track/:trackId', requireAuth, attachmentUploadLimiter, upload.single('file'), async (req, res) => {
         try {
             const { trackId } = req.params;
 
@@ -89,12 +115,11 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             const safeFilename = req.file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
             const storageKey = `attachments/${trackId}/${timestamp}_${safeFilename}`;
 
-            // Upload to MinIO
-            await minioClient.putObject(
+            // Upload to MinIO from Multer's disk storage.
+            await minioClient.fPutObject(
                 BUCKET_NAME,
                 storageKey,
-                req.file.buffer,
-                req.file.size,
+                req.file.path,
                 { 'Content-Type': req.file.mimetype }
             );
 
@@ -109,6 +134,8 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
         } catch (err) {
             console.error('Upload attachment error:', err);
             res.status(500).json({ error: 'Failed to upload attachment' });
+        } finally {
+            await removeTempFile(req.file);
         }
     });
 
@@ -144,10 +171,14 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             const stat = await minioClient.statObject(BUCKET_NAME, attachment.storage_key);
             
             res.setHeader('Content-Type', 'application/octet-stream');
-            res.setHeader('Content-Disposition', `attachment; filename="${attachment.filename}"`);
+            res.setHeader('Content-Disposition', attachmentDisposition(attachment.filename));
             res.setHeader('Content-Length', stat.size);
 
             const stream = await minioClient.getObject(BUCKET_NAME, attachment.storage_key);
+            stream.on('error', err => {
+                console.error('Attachment stream error:', err);
+                res.destroy(err);
+            });
             stream.pipe(res);
         } catch (err) {
             console.error('Download attachment error:', err);
@@ -187,13 +218,18 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 return res.status(403).json({ error: 'Access denied - only owner can rename attachments' });
             }
 
+            const sanitizedFilename = sanitizeText(filename);
+            if (!sanitizedFilename) {
+                return res.status(400).json({ error: 'Filename is required' });
+            }
+
             // Update filename in database
             const updated = await pool.query(`
                 UPDATE attachments 
                 SET filename = $1
                 WHERE id = $2
                 RETURNING id, filename, size_bytes, created_at
-            `, [filename.trim(), id]);
+            `, [sanitizedFilename, id]);
 
             res.json({ attachment: updated.rows[0] });
         } catch (err) {

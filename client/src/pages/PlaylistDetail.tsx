@@ -205,7 +205,7 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
   }
 
   const handlePlay = (track: Track) => {
-    if (!track.current_version_id) return
+    if (!track.current_version_id || !track.stream_url) return
 
     const isCurrentTrack = currentTrack?.id === track.id
 
@@ -214,11 +214,12 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
     } else {
       // Build queue from all playable tracks in the playlist
       const queue = tracks
-        .filter((t) => t.current_version_id)
+        .filter((t) => t.current_version_id && t.stream_url)
         .map((t) => ({
           id: t.id,
           title: t.title,
           versionId: t.current_version_id!,
+          streamUrl: t.stream_url!,
           version: 1,
           duration: t.duration_seconds || 0,
           coverArt: t.cover_art_path ? getAssetUrl(t.cover_art_path) : undefined,
@@ -229,6 +230,7 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
           id: track.id,
           title: track.title,
           versionId: track.current_version_id,
+          streamUrl: track.stream_url,
           version: 1,
           duration: track.duration_seconds || 0,
           coverArt: track.cover_art_path ? getAssetUrl(track.cover_art_path) : undefined,

@@ -59,7 +59,7 @@ export default function SharedTrackPage() {
   }
 
   const handlePlay = () => {
-    if (!track || !track.current_version_id) return
+    if (!track || !track.current_version_id || !track.stream_url) return
 
     const isCurrentTrack = currentTrack?.id === track.id
 
@@ -70,6 +70,7 @@ export default function SharedTrackPage() {
         id: track.id,
         title: track.title,
         versionId: track.current_version_id,
+        streamUrl: track.stream_url,
         version: track.current_version_number || 1,
         duration: track.duration_seconds || 0,
         coverArt: track.cover_art_path ? getAssetUrl(track.cover_art_path) : undefined,
@@ -235,7 +236,7 @@ export default function SharedTrackPage() {
             {/* Reactions */}
             <div className="mb-6 border-t border-surface-800 pt-6">
               <h3 className="mb-3 text-sm font-medium text-surface-400">React to this track</h3>
-              <ReactionBar entityType="track" entityId={track.id} />
+              <ReactionBar entityType="track" entityId={track.id} shareToken={token} />
             </div>
 
             {/* Comments Section */}

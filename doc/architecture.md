@@ -26,7 +26,7 @@ In production the React SPA is built and served as static files by the Express A
 | Backend | Node.js 18, Express |
 | Database | PostgreSQL 15 |
 | Object Storage | MinIO (S3-compatible) |
-| Audio Processing | ffmpeg / fluent-ffmpeg |
+| Audio Metadata | music-metadata |
 | Auth | JWT + bcrypt |
 | Security | Helmet, CORS, rate limiting |
 | Containerization | Docker Compose |

@@ -6,6 +6,7 @@ interface Track {
   title: string
   artist?: string
   versionId: string
+  streamUrl: string
   version: number
   duration: number
   coverArt?: string
@@ -30,8 +31,6 @@ interface PlayerState {
   setVolume: (volume: number) => void
   setProgress: (progress: number) => void
 }
-
-const API_URL = import.meta.env.VITE_API_URL || '/api'
 
 // Ensure Howler auto-unlocks AudioContext on iOS
 Howler.autoUnlock = true
@@ -76,7 +75,7 @@ function createHowl(
   set: (partial: Partial<PlayerState>) => void,
 ): Howl {
   const howl = new Howl({
-    src: [`${API_URL}/stream/${track.versionId}`],
+    src: [track.streamUrl],
     html5: true,
     volume: get().volume,
     onplay: () => {

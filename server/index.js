@@ -10,6 +10,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { validateConfig } = require('./lib/config');
+const { storageUrl, streamUrl, verifyGrant } = require('./lib/grants');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -39,7 +41,7 @@ app.use(helmet({
 // Restrict CORS to configured origins
 const corsOrigin = process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
-    : undefined; // undefined = allow all (dev); set CORS_ORIGIN in production
+    : false; // Disabled by default; same-origin browser requests do not need CORS.
 app.use(cors({
     origin: corsOrigin,
     credentials: true,
@@ -67,10 +69,18 @@ const upload = multer({
         destination: uploadDir,
         filename: (_req, file, cb) => {
             const uniqueSuffix = crypto.randomBytes(8).toString('hex');
-            cb(null, `${uniqueSuffix}-${file.originalname}`);
+            const safeName = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_');
+            cb(null, `${uniqueSuffix}-${safeName}`);
         },
     }),
-    limits: { fileSize: 500 * 1024 * 1024 }, // 500MB limit
+    limits: {
+        fileSize: 500 * 1024 * 1024,
+        files: 1,
+        fields: 10,
+        parts: 12,
+        fieldNameSize: 100,
+        fieldSize: 64 * 1024,
+    },
 });
 
 // Database Connection
@@ -100,58 +110,54 @@ const minioClient = new Minio.Client({
 
 const BUCKET_NAME = process.env.S3_BUCKET || 'tracks';
 
-// Input sanitization — strip HTML tags from plaintext user input
-function sanitizeText(input) {
-    if (typeof input !== 'string') return input;
-    return input.replace(/<[^>]*>/g, '').trim();
-}
-
 // --- Startup: Ensure bucket exists and seed admin ---
 async function initialize() {
     // Create MinIO bucket if it doesn't exist
-    try {
-        const bucketExists = await minioClient.bucketExists(BUCKET_NAME);
-        if (!bucketExists) {
-            await minioClient.makeBucket(BUCKET_NAME);
-            console.log(`Created bucket: ${BUCKET_NAME}`);
-        } else {
-            console.log(`Bucket exists: ${BUCKET_NAME}`);
-        }
-    } catch (err) {
-        console.error('MinIO bucket error:', err.message);
+    const bucketExists = await minioClient.bucketExists(BUCKET_NAME);
+    if (!bucketExists) {
+        await minioClient.makeBucket(BUCKET_NAME);
+        console.log(`Created bucket: ${BUCKET_NAME}`);
+    } else {
+        console.log(`Bucket exists: ${BUCKET_NAME}`);
     }
 
-    // Seed admin user if not exists
+    // Keep the configured bootstrap administrator authoritative. This makes an
+    // ADMIN_PASSWORD rotation effective for an existing persistent database.
     let adminUserId;
-    try {
-        const adminEmail = process.env.ADMIN_EMAIL;
-        const adminPassword = process.env.ADMIN_PASSWORD;
+    const adminEmail = process.env.ADMIN_EMAIL.toLowerCase();
+    const adminPassword = process.env.ADMIN_PASSWORD;
+    const existing = await pool.query(
+        'SELECT id, password_hash, role, is_active FROM users WHERE email = $1',
+        [adminEmail]
+    );
 
-        if (adminEmail && adminPassword) {
-            const existing = await pool.query(
-                'SELECT id FROM users WHERE email = $1',
-                [adminEmail]
+    if (existing.rows.length === 0) {
+        const hash = await bcrypt.hash(adminPassword, 12);
+        const result = await pool.query(
+            'INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id',
+            [adminEmail, hash, 'ADMIN']
+        );
+        adminUserId = result.rows[0].id;
+        console.log(`Admin user created: ${adminEmail}`);
+    } else {
+        const admin = existing.rows[0];
+        adminUserId = admin.id;
+        const passwordMatches = await bcrypt.compare(adminPassword, admin.password_hash);
+        if (!passwordMatches || admin.role !== 'ADMIN' || !admin.is_active) {
+            const hash = passwordMatches ? admin.password_hash : await bcrypt.hash(adminPassword, 12);
+            await pool.query(
+                'UPDATE users SET password_hash = $1, role = $2, is_active = true WHERE id = $3',
+                [hash, 'ADMIN', admin.id]
             );
-
-            if (existing.rows.length === 0) {
-                const hash = await bcrypt.hash(adminPassword, 10);
-                const result = await pool.query(
-                    'INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id',
-                    [adminEmail, hash, 'ADMIN']
-                );
-                adminUserId = result.rows[0].id;
-                console.log(`Admin user created: ${adminEmail}`);
-            } else {
-                adminUserId = existing.rows[0].id;
-                console.log(`Admin user exists: ${adminEmail}`);
-            }
+            console.log(`Admin user credentials synchronized: ${adminEmail}`);
+        } else {
+            console.log(`Admin user exists: ${adminEmail}`);
         }
-    } catch (err) {
-        console.error('Admin seed error:', err.message);
     }
 
-    // Seed example track and playlist for admin
-    if (adminUserId) {
+    // Example data is opt-in so deleting all content does not cause it to
+    // reappear on the next production restart.
+    if (adminUserId && process.env.SEED_EXAMPLE_CONTENT === 'true') {
         try {
             await seedExampleContent(adminUserId);
         } catch (err) {
@@ -301,8 +307,22 @@ app.use('/api/reactions', reactionRoutes);
 app.use('/api/export', exportRoutes);
 
 // --- Health Check ---
-app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/api/health', async (_req, res) => {
+    const checks = { database: false, storage: false };
+    try {
+        await pool.query('SELECT 1');
+        checks.database = true;
+        checks.storage = await minioClient.bucketExists(BUCKET_NAME);
+    } catch (err) {
+        console.error('Readiness check failed:', err.message);
+    }
+
+    const ready = checks.database && checks.storage;
+    res.status(ready ? 200 : 503).json({
+        status: ready ? 'ok' : 'unavailable',
+        checks,
+        timestamp: new Date().toISOString(),
+    });
 });
 
 // --- Storage Endpoint (for cover art, etc.) ---
@@ -314,6 +334,10 @@ app.get('/api/storage/*', async (req, res) => {
 
         if (!storageKey) {
             return res.status(400).send('Invalid storage key');
+        }
+
+        if (!verifyGrant(req.query.grant, { purpose: 'storage', storage_key: storageKey })) {
+            return res.status(403).send('Access denied');
         }
 
         // Get object from MinIO
@@ -344,7 +368,8 @@ app.get('/api/storage/*', async (req, res) => {
 
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Length', stat.size);
-        res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+        // Keep signed resource responses out of shared intermediary caches.
+        res.setHeader('Cache-Control', 'private, max-age=300');
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Content-Security-Policy', 'sandbox');
 
@@ -391,13 +416,19 @@ app.get('/api/stream/:versionId', optionalAuth, async (req, res) => {
 
         const file = result.rows[0];
 
-        // 2. Authorization check: owner, or valid share token + public
+        // 2. Authorization check: scoped grant, owner, or valid track share.
+        // Playlist share pages receive version-scoped grants from the playlist
+        // endpoint, so the stream route never needs the playlist token itself.
+        const hasValidGrant = verifyGrant(req.query.grant, {
+            purpose: 'stream',
+            version_id: versionId,
+        });
         const isOwner = req.user && req.user.id === file.owner_id;
         const shareToken = req.query.token;
         const hasValidShare = shareToken && shareToken === file.share_token
                               && file.release_status === 'PUBLIC';
 
-        if (!isOwner && !hasValidShare) {
+        if (!hasValidGrant && !isOwner && !hasValidShare) {
             return res.status(403).send('Access denied');
         }
 
@@ -407,7 +438,7 @@ app.get('/api/stream/:versionId', optionalAuth, async (req, res) => {
 
         // 3. Handle Range Request (Seeking)
         if (range) {
-            const rangeMatch = range.match(/bytes=(\d*)-(\d*)/);
+            const rangeMatch = range.match(/^bytes=(\d*)-(\d*)$/);
             if (!rangeMatch) {
                 return res.status(416).send('Invalid range');
             }
@@ -499,50 +530,46 @@ app.get('/api/stream/:versionId', optionalAuth, async (req, res) => {
 
 // --- Database Migration Runner ---
 async function runMigrations() {
-    try {
-        // Create migrations tracking table if not exists
-        await pool.query(`
+    // Create migrations tracking table if not exists
+    await pool.query(`
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 id SERIAL PRIMARY KEY,
                 filename VARCHAR(255) UNIQUE NOT NULL,
                 applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
-        `);
+    `);
 
-        const migrationsDir = path.join(__dirname, 'db', 'migrations');
-        if (!fs.existsSync(migrationsDir)) return;
+    const migrationsDir = path.join(__dirname, 'db', 'migrations');
+    if (!fs.existsSync(migrationsDir)) return;
 
-        const files = fs.readdirSync(migrationsDir)
-            .filter(f => f.endsWith('.sql'))
-            .sort();
+    const files = fs.readdirSync(migrationsDir)
+        .filter(f => f.endsWith('.sql'))
+        .sort();
 
-        for (const file of files) {
-            const { rows } = await pool.query(
-                'SELECT 1 FROM schema_migrations WHERE filename = $1',
-                [file]
-            );
-            if (rows.length === 0) {
-                const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
-                const client = await pool.connect();
-                try {
-                    await client.query('BEGIN');
-                    await client.query(sql);
-                    await client.query(
-                        'INSERT INTO schema_migrations (filename) VALUES ($1)',
-                        [file]
-                    );
-                    await client.query('COMMIT');
-                    console.log(`Migration applied: ${file}`);
-                } catch (migrationErr) {
-                    await client.query('ROLLBACK');
-                    throw migrationErr;
-                } finally {
-                    client.release();
-                }
+    for (const file of files) {
+        const { rows } = await pool.query(
+            'SELECT 1 FROM schema_migrations WHERE filename = $1',
+            [file]
+        );
+        if (rows.length === 0) {
+            const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+            const client = await pool.connect();
+            try {
+                await client.query('BEGIN');
+                await client.query(sql);
+                await client.query(
+                    'INSERT INTO schema_migrations (filename) VALUES ($1)',
+                    [file]
+                );
+                await client.query('COMMIT');
+                console.log(`Migration applied: ${file}`);
+            } catch (migrationErr) {
+                await client.query('ROLLBACK');
+                throw migrationErr;
+            } finally {
+                client.release();
             }
         }
-    } catch (err) {
-        console.error('Migration error:', err.message);
     }
 }
 
@@ -558,6 +585,15 @@ function isBot(userAgent) {
     if (!userAgent) return false;
     const ua = userAgent.toLowerCase();
     return BOT_UA_PATTERNS.some(bot => ua.includes(bot));
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 async function handleShareOgTags(req, res, next) {
@@ -580,10 +616,10 @@ async function handleShareOgTags(req, res, next) {
             `, [token]);
             if (result.rows.length === 0) return next();
             const track = result.rows[0];
-            title = track.title;
-            description = [track.artist, track.status].filter(Boolean).join(' - ');
-            imageUrl = track.cover_art_path ? `${baseUrl}${track.cover_art_path}` : null;
-            audioUrl = track.version_id ? `${baseUrl}/api/stream/${track.version_id}?token=${token}` : null;
+            title = escapeHtml(track.title);
+            description = escapeHtml([track.artist, track.status].filter(Boolean).join(' - '));
+            imageUrl = track.cover_art_path ? `${baseUrl}${storageUrl(track.cover_art_path)}` : null;
+            audioUrl = track.version_id ? `${baseUrl}${streamUrl(track.version_id)}` : null;
         } else {
             const result = await pool.query(`
                 SELECT p.title, p.artist, p.type, p.cover_art_path,
@@ -595,9 +631,9 @@ async function handleShareOgTags(req, res, next) {
             `, [token]);
             if (result.rows.length === 0) return next();
             const playlist = result.rows[0];
-            title = playlist.title;
-            description = [playlist.artist, `${playlist.track_count} tracks`, playlist.type].filter(Boolean).join(' - ');
-            imageUrl = playlist.cover_art_path ? `${baseUrl}${playlist.cover_art_path}` : null;
+            title = escapeHtml(playlist.title);
+            description = escapeHtml([playlist.artist, `${playlist.track_count} tracks`, playlist.type].filter(Boolean).join(' - '));
+            imageUrl = playlist.cover_art_path ? `${baseUrl}${storageUrl(playlist.cover_art_path)}` : null;
         }
 
         const ogHtml = `<!DOCTYPE html>
@@ -631,19 +667,49 @@ if (fs.existsSync(frontendPath)) {
     app.get('/share/:type/:token', handleShareOgTags);
 
     // SPA fallback: serve index.html for any non-API route
-    app.get('*', (req, res) => {
-        if (!req.path.startsWith('/api/')) {
-            res.sendFile(path.join(frontendPath, 'index.html'));
-        }
+    app.get('*', (req, res, next) => {
+        if (req.path.startsWith('/api/')) return next();
+        return res.sendFile(path.join(frontendPath, 'index.html'));
     });
 }
 
-// Export for route modules
-module.exports = { app, pool, minioClient, BUCKET_NAME, sanitizeText };
+// Central error mapping for middleware errors that occur before route handlers,
+// especially multipart size/shape errors from Multer.
+app.use((err, _req, res, _next) => {
+    if (err instanceof multer.MulterError) {
+        const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+        return res.status(status).json({ error: err.message, code: err.code });
+    }
 
-// Start server
-runMigrations().then(() => initialize()).then(() => {
-    app.listen(PORT, () => {
+    console.error('Unhandled request error:', err);
+    return res.status(500).json({ error: 'Server error' });
+});
+
+async function startServer() {
+    validateConfig();
+    await runMigrations();
+    await initialize();
+
+    return app.listen(PORT, () => {
         console.log(`SoundRaft API running on port ${PORT}`);
     });
-});
+}
+
+if (require.main === module) {
+    startServer().catch(err => {
+        console.error('Fatal startup error:', err);
+        pool.end().finally(() => {
+            process.exitCode = 1;
+        });
+    });
+}
+
+module.exports = {
+    app,
+    pool,
+    minioClient,
+    BUCKET_NAME,
+    initialize,
+    runMigrations,
+    startServer,
+};
