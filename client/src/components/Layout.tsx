@@ -53,7 +53,7 @@ export default function Layout() {
         </a>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {/* Mobile sidebar overlay */}
         {sidebarOpen && (
           <div
@@ -64,7 +64,7 @@ export default function Layout() {
 
         {/* Sidebar - hidden on mobile, shown as overlay when toggled */}
         <div
-          className={`fixed inset-y-0 left-0 z-50 w-64 transform transition-transform duration-200 sm:relative sm:translate-x-0 ${
+          className={`fixed inset-y-0 left-0 z-50 w-64 shrink-0 transform transition-transform duration-200 sm:relative sm:translate-x-0 ${
             sidebarOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
           ref={navigation} aria-hidden={mobile && !sidebarOpen ? true : undefined}
@@ -85,7 +85,7 @@ export default function Layout() {
         </div>
 
         {/* Main content */}
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6">
+        <main className="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">
           <Outlet />
         </main>
       </div>

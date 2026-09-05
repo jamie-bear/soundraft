@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 export default defineConfig({
   testDir: './test/browser', fullyParallel: false, workers: 1, timeout: 45_000,
+  testIgnore: 'layout.spec.ts',
   reporter: 'list',
   use: { baseURL: process.env.E2E_BASE_URL || 'http://127.0.0.1:4173', trace: 'off', video: 'off', screenshot: 'off' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],

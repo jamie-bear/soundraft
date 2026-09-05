@@ -107,7 +107,7 @@ export default function CommentSection({
             onChange={(e) => setNewComment(e.target.value)}
             aria-label="Comment"
             placeholder={isTrack ? "Add a comment (timestamped if playing)..." : "Add a comment..."}
-            className="flex-1 rounded-lg border border-surface-700 bg-surface-800 px-3 py-2 text-white placeholder-surface-500 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            className="min-w-0 flex-1 rounded-lg border border-surface-700 bg-surface-800 px-3 py-2 text-white placeholder-surface-500 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
             disabled={submitting}
           />
           <button
@@ -132,8 +132,8 @@ export default function CommentSection({
         <div className="space-y-3">
           {comments.map((comment) => (
             <div key={comment.id} className="rounded-lg border border-surface-800 bg-surface-900 p-4">
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-sm font-medium text-white">{comment.user_email}</span>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="min-w-0 break-words text-sm font-medium text-white">{comment.user_email}</span>
                 <div className="flex items-center gap-2 text-xs text-surface-500">
                   {/* Timestamp link for track comments */}
                   {isTrack && comment.audio_timestamp !== null && comment.audio_timestamp !== undefined && (
@@ -160,7 +160,7 @@ export default function CommentSection({
                   )}
                 </div>
               </div>
-              <p className="text-surface-300">{comment.body}</p>
+              <p className="break-words text-surface-300">{comment.body}</p>
             </div>
           ))}
         </div>

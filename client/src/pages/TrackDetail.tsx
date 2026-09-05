@@ -298,9 +298,9 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
       {/* Track Card */}
       <div className="rounded-2xl bg-surface-900 p-4 sm:p-6">
         {/* Track Header */}
-        <div className="mb-6 flex flex-col sm:flex-row gap-6">
+        <div className="mb-6 flex flex-col lg:flex-row gap-6">
           {/* Cover Art */}
-          <div className="relative mx-auto sm:mx-0 h-48 w-48 sm:h-60 sm:w-60 shrink-0 rounded-xl bg-surface-800 overflow-hidden">
+          <div className="relative mx-auto lg:mx-0 h-48 w-48 lg:h-60 lg:w-60 shrink-0 rounded-xl bg-surface-800 overflow-hidden">
             {isOwner ? (
               <CoverArtUpload
                 currentCoverUrl={track.cover_art_path}
@@ -344,8 +344,8 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
           </div>
 
           {/* Track Info */}
-          <div className="flex-1 min-w-0 text-center sm:text-left">
-            <div className="mb-2 flex items-center justify-center sm:justify-start gap-2">
+          <div className="flex-1 min-w-0 text-center lg:text-left">
+            <div className="mb-2 flex items-center justify-center lg:justify-start gap-2">
               {isOwner ? (
                 <select
                   value={track.status}
@@ -402,7 +402,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
               />
             ) : (
               <p 
-                className={`mb-2 text-lg text-surface-300 ${isOwner ? 'cursor-pointer hover:text-white transition-colors' : ''}`}
+                className={`mb-2 break-words text-lg text-surface-300 ${isOwner ? 'cursor-pointer hover:text-white transition-colors' : ''}`}
                 onClick={isOwner ? handleArtistEdit : undefined}
                 title={isOwner ? 'Click to edit artist' : undefined}
               >
@@ -419,7 +419,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
             {track.current_version_id && (
               <button
                 onClick={handlePlay}
-                className="mt-4 mx-auto sm:mx-0 flex items-center gap-2 rounded-full bg-primary-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
+                className="mt-4 mx-auto lg:mx-0 flex items-center gap-2 rounded-full bg-primary-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
               >
                 {isCurrentlyPlaying ? (
                   <>
@@ -441,7 +441,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
 
             {/* Owner Action Buttons */}
             {isOwner && (
-              <div className="mt-3 flex flex-wrap justify-center sm:justify-start gap-2">
+              <div className="mt-3 flex flex-wrap justify-center lg:justify-start gap-2">
                 {uploadProgress !== null && <button type="button" onClick={() => uploadController.current?.abort()} className="mr-3 underline">Cancel upload</button>}
                 {uploadProgress !== null ? (
                   // Upload progress indicator
@@ -564,7 +564,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
             <div className="space-y-4">
               {/* Comment Access Control (owner only) */}
               {isOwner && (
-                <div className="flex items-center justify-between rounded-lg border border-surface-800 bg-surface-900/50 px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-surface-800 bg-surface-900/50 px-4 py-3">
                   <div className="flex items-center gap-2.5 text-sm font-medium text-surface-400">
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
@@ -574,7 +574,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
                   <select
                     value={track.comment_access}
                     onChange={(e) => handleCommentAccessChange(e.target.value as Track['comment_access'])}
-                    className="rounded-md border border-surface-700 bg-surface-800 px-3 py-2 text-sm font-medium text-white focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer"
+                    className="min-w-0 max-w-full rounded-md border border-surface-700 bg-surface-800 px-3 py-2 text-sm font-medium text-white focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer"
                   >
                     <option value="PRIVATE">Private (only me)</option>
                     <option value="PUBLIC_VIEW">View Only (shared link can view)</option>

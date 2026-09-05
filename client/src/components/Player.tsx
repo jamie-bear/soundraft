@@ -16,7 +16,7 @@ export default function Player() {
   }
 
   return (
-    <footer className="border-t border-surface-800 bg-surface-900 px-3 sm:px-4 py-2 sm:py-3">
+    <footer className="shrink-0 border-t border-surface-800 bg-surface-900 px-3 sm:px-4 py-2 sm:py-3">
       <div role="status" aria-live="polite" className="text-sm text-surface-300">
         {status === 'loading' ? 'Buffering audio…' : error}
         {(status === 'error' || status === 'offline') && <button onClick={retry} className="ml-3 underline">Retry playback</button>}
@@ -107,7 +107,7 @@ export default function Player() {
               step="0.01"
               value={volume}
               onChange={(e) => setVolume(parseFloat(e.target.value))}
-              className="flex-1 h-1 bg-surface-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+              className="min-w-0 flex-1 h-1 bg-surface-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
               style={{ touchAction: 'none' }}
             />
           </div>
@@ -118,7 +118,7 @@ export default function Player() {
           <span className="w-9 text-right text-xs text-surface-400 tabular-nums">
             {formatTime(progress * (currentTrack?.duration || 0))}
           </span>
-          <div className="flex-1 py-2" style={{ touchAction: 'none' }}>
+          <div className="min-w-0 flex-1 py-2" style={{ touchAction: 'none' }}>
             <input
               aria-label="Playback position" type="range"
               min="0"
@@ -139,10 +139,10 @@ export default function Player() {
       {/* Desktop layout (horizontal) */}
       <div className="hidden sm:flex items-center gap-4">
         {/* Track info */}
-        <div className="flex w-64 items-center gap-3">
+        <div className="flex min-w-0 w-64 items-center gap-3">
           {currentTrack ? (
             <>
-              <div className="flex h-12 w-12 items-center justify-center rounded bg-surface-700">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded bg-surface-700">
                 {currentTrack.coverArt ? (
                   <img src={currentTrack.coverArt} alt="" className="h-full w-full rounded object-cover" />
                 ) : (
@@ -162,7 +162,7 @@ export default function Player() {
         </div>
 
         {/* Playback controls */}
-        <div className="flex flex-1 flex-col items-center gap-1">
+        <div className="flex min-w-0 flex-1 flex-col items-center gap-1">
           <div className="flex items-center gap-4">
             {/* Previous */}
             <button
@@ -216,7 +216,7 @@ export default function Player() {
               step="0.001"
               value={progress}
               onChange={(e) => seek(parseFloat(e.target.value))}
-              className="flex-1 h-1 bg-surface-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+              className="min-w-0 flex-1 h-1 bg-surface-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
               disabled={!currentTrack}
             />
             <span className="w-10 text-xs text-surface-400">
@@ -226,8 +226,8 @@ export default function Player() {
         </div>
 
         {/* Volume control */}
-        <div className="flex w-32 items-center gap-2">
-          <svg className="h-5 w-5 text-surface-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div className="flex w-32 shrink-0 items-center gap-2">
+          <svg className="h-5 w-5 shrink-0 text-surface-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
           </svg>
           <input
@@ -237,7 +237,7 @@ export default function Player() {
             step="0.01"
             value={volume}
             onChange={(e) => setVolume(parseFloat(e.target.value))}
-            className="flex-1 h-1 bg-surface-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+            className="min-w-0 flex-1 h-1 bg-surface-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
           />
         </div>
       </div>
