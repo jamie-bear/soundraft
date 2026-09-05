@@ -7,10 +7,10 @@ ANALYZE attachments;
 ANALYZE comments;
 
 EXPLAIN (ANALYZE, BUFFERS)
-SELECT id, title, updated_at
+SELECT id, title, created_at
 FROM tracks
 WHERE owner_id = (SELECT id FROM users ORDER BY created_at LIMIT 1)
-ORDER BY updated_at DESC, id DESC
+ORDER BY created_at DESC, id DESC
 LIMIT 101;
 
 EXPLAIN (ANALYZE, BUFFERS)

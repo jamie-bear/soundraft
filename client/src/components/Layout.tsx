@@ -1,10 +1,24 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { Outlet } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import Player from './Player'
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 639px)').matches)
+  const navigation = useRef<HTMLDivElement>(null)
+  const menuButton = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 639px)')
+    const update = () => setMobile(media.matches)
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
+  useEffect(() => {
+    if (navigation.current) navigation.current.inert = mobile && !sidebarOpen
+    if (mobile && sidebarOpen) navigation.current?.querySelector<HTMLButtonElement>('button')?.focus()
+  }, [mobile, sidebarOpen])
+  const closeNavigation = () => { setSidebarOpen(false); menuButton.current?.focus() }
   const touchStartX = useRef<number | null>(null)
 
   // Swipe-left-to-close on mobile sidebar
@@ -26,7 +40,7 @@ export default function Layout() {
       {/* Mobile header */}
       <header className="flex items-center gap-3 border-b border-surface-800 bg-surface-900 px-4 py-3 sm:hidden">
         <button
-          onClick={() => setSidebarOpen(true)}
+          ref={menuButton} aria-label="Open navigation" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(true)}
           className="flex h-10 w-10 items-center justify-center rounded-lg text-surface-300 hover:bg-surface-800 hover:text-white transition-colors"
         >
           <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -53,10 +67,21 @@ export default function Layout() {
           className={`fixed inset-y-0 left-0 z-50 w-64 transform transition-transform duration-200 sm:relative sm:translate-x-0 ${
             sidebarOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
+          ref={navigation} aria-hidden={mobile && !sidebarOpen ? true : undefined}
+          onKeyDown={event => {
+            if (!mobile || !sidebarOpen) return
+            if (event.key === 'Escape') { event.preventDefault(); closeNavigation() }
+            if (event.key === 'Tab') {
+              const items = Array.from(navigation.current!.querySelectorAll<HTMLElement>('a[href],button:not([disabled])'))
+              const first = items[0], last = items[items.length - 1]
+              if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+              if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+            }
+          }}
           onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
         >
-          <Sidebar onClose={() => setSidebarOpen(false)} />
+          <Sidebar onClose={closeNavigation} />
         </div>
 
         {/* Main content */}

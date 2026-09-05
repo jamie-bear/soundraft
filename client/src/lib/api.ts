@@ -81,38 +81,22 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
   return data
 }
 
-async function requestAllPages<T, K extends string>(endpoint: string, key: K): Promise<Record<K, T[]>> {
-  const items: T[] = []
-  let cursor: string | null = null
-  do {
-    const separator = endpoint.includes('?') ? '&' : '?'
-    const pageEndpoint: string = `${endpoint}${separator}limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
-    const page: Record<K, T[]> & { next_cursor?: string | null } =
-      await request<Record<K, T[]> & { next_cursor?: string | null }>(pageEndpoint)
-    items.push(...page[key])
-    cursor = page.next_cursor || null
-  } while (cursor)
-  return { [key]: items } as Record<K, T[]>
+export interface PageOptions { cursor?: string | null; search?: string; filter?: string; sort?: string; limit?: number }
+function pageUrl(endpoint: string, options: PageOptions = {}) {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries({ limit: 50, ...options })) if (value != null && value !== '') params.set(key, String(value))
+  return `${endpoint}${endpoint.includes('?') ? '&' : '?'}${params}`
 }
-
-async function requestAllCommentPages(endpoint: string): Promise<{
-  comments: Comment[]; canPost: boolean; commentsHidden?: boolean
-}> {
-  const comments: Comment[] = []
-  let cursor: string | null = null
-  let canPost = false
-  let commentsHidden = false
-  do {
-    const separator = endpoint.includes('?') ? '&' : '?'
-    const page: { comments: Comment[]; canPost: boolean; commentsHidden?: boolean; next_cursor?: string | null } = await request<{
-      comments: Comment[]; canPost: boolean; commentsHidden?: boolean; next_cursor?: string | null
-    }>(`${endpoint}${separator}limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`)
-    comments.push(...page.comments)
-    canPost = page.canPost
-    commentsHidden = Boolean(page.commentsHidden)
-    cursor = page.next_cursor || null
-  } while (cursor)
-  return { comments, canPost, commentsHidden }
+function requestPage<T, K extends string>(endpoint: string, key: K, options?: PageOptions): Promise<Record<K, T[]> & { next_cursor: string | null }> {
+  void key
+  return request(pageUrl(endpoint, options))
+}
+function requestCommentPage(endpoint: string, options?: PageOptions) {
+  return request<{ comments: Comment[]; canPost: boolean; commentsHidden?: boolean; next_cursor: string | null }>(pageUrl(endpoint, options))
+}
+export const mediaApi = {
+  renew: (versionId: string, share?: { type: 'track' | 'playlist'; token: string }) =>
+    request<{ stream_url: string }>('/media/renew', { method: 'POST', body: JSON.stringify({ versionId, share }) }),
 }
 
 // Auth API
@@ -136,7 +120,7 @@ export const authApi = {
 
 // Tracks API
 export const tracksApi = {
-  list: () => requestAllPages<Track, 'tracks'>('/tracks', 'tracks'),
+  list: (options?: PageOptions) => requestPage<Track, 'tracks'>('/tracks', 'tracks', options),
 
   get: (id: string, token?: string) =>
     request<{ track: Track; isOwner: boolean }>(
@@ -158,13 +142,14 @@ export const tracksApi = {
   delete: (id: string) =>
     request<{ success: boolean }>(`/tracks/${id}`, { method: 'DELETE' }),
 
-  getVersions: (id: string) =>
-    requestAllPages<TrackVersion, 'versions'>(`/tracks/${id}/versions`, 'versions'),
+  getVersions: (id: string, options?: PageOptions) =>
+    requestPage<TrackVersion, 'versions'>(`/tracks/${id}/versions`, 'versions', options),
 
   uploadVersion: async (
     id: string,
     file: File,
-    onProgress?: (progress: number) => void
+    onProgress?: (progress: number) => void,
+    signal?: AbortSignal
   ): Promise<{ version: TrackVersion }> => {
     const formData = new FormData()
     formData.append('audio', file)
@@ -173,6 +158,13 @@ export const tracksApi = {
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
+      const abort = () => xhr.abort()
+      xhr.timeout = 15 * 60 * 1000
+      xhr.addEventListener('abort', () => reject(new DOMException('Upload cancelled', 'AbortError')))
+      xhr.addEventListener('timeout', () => reject(new ApiError('Upload timed out. Please retry.', 408)))
+      xhr.addEventListener('loadend', () => signal?.removeEventListener('abort', abort))
+      if (signal?.aborted) { reject(new DOMException('Upload cancelled', 'AbortError')); return }
+      signal?.addEventListener('abort', abort, { once: true })
 
       xhr.upload.addEventListener('progress', (event) => {
         if (event.lengthComputable && onProgress) {
@@ -262,14 +254,14 @@ export interface PlaylistWithTrackInfo extends Playlist {
 }
 
 export const playlistsApi = {
-  list: (forTrack?: string) => 
-    requestAllPages<PlaylistWithTrackInfo, 'playlists'>(
-      `/playlists${forTrack ? `?forTrack=${forTrack}` : ''}`, 'playlists'
+  list: (forTrack?: string, options?: PageOptions) =>
+    requestPage<PlaylistWithTrackInfo, 'playlists'>(
+      `/playlists${forTrack ? `?forTrack=${forTrack}` : ''}`, 'playlists', options
     ),
 
-  get: (id: string, token?: string) =>
-    request<{ playlist: Playlist; tracks: Track[]; isOwner: boolean }>(
-      `/playlists/${id}${token ? `?token=${token}` : ''}`
+  get: (id: string, token?: string, options?: PageOptions) =>
+    request<{ playlist: Playlist; tracks: (Track & { sort_order: number })[]; isOwner: boolean; next_cursor: string | null }>(
+      pageUrl(`/playlists/${id}${token ? `?token=${encodeURIComponent(token)}` : ''}`, options)
     ),
 
   create: (data: { title: string; type?: string }) =>
@@ -348,9 +340,9 @@ export const playlistsApi = {
 // Comments API
 export const commentsApi = {
   // Track comments
-  listTrackComments: (trackId: string, token?: string) =>
-    requestAllCommentPages(
-      `/comments/track/${trackId}${token ? `?token=${token}` : ''}`
+  listTrackComments: (trackId: string, token?: string, options?: PageOptions) =>
+    requestCommentPage(
+      `/comments/track/${trackId}${token ? `?token=${encodeURIComponent(token)}` : ''}`, options
     ),
 
   createTrackComment: (trackId: string, body: string, audioTimestamp?: number, token?: string) =>
@@ -360,9 +352,9 @@ export const commentsApi = {
     }),
 
   // Playlist comments
-  listPlaylistComments: (playlistId: string, token?: string) =>
-    requestAllCommentPages(
-      `/comments/playlist/${playlistId}${token ? `?token=${token}` : ''}`
+  listPlaylistComments: (playlistId: string, token?: string, options?: PageOptions) =>
+    requestCommentPage(
+      `/comments/playlist/${playlistId}${token ? `?token=${encodeURIComponent(token)}` : ''}`, options
     ),
 
   createPlaylistComment: (playlistId: string, body: string, token?: string) =>
@@ -378,8 +370,8 @@ export const commentsApi = {
 
 // Attachments API
 export const attachmentsApi = {
-  list: (trackId: string) =>
-    requestAllPages<Attachment, 'attachments'>(`/attachments/track/${trackId}`, 'attachments'),
+  list: (trackId: string, options?: PageOptions) =>
+    requestPage<Attachment, 'attachments'>(`/attachments/track/${trackId}`, 'attachments', options),
 
   upload: async (trackId: string, file: File) => {
     const formData = new FormData()

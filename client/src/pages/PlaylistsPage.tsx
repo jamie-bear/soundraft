@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react'
+import PageControls from '../components/PageControls'
+import { appendUnique } from '../lib/pages'
+import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { playlistsApi, Playlist, getAssetUrl } from '../lib/api'
 
@@ -6,24 +8,36 @@ export default function PlaylistsPage() {
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [listError, setListError] = useState('')
+  const [sort, setSort] = useState('newest')
+  const [filter, setFilter] = useState('')
+  const generation = useRef(0)
   const [showCreatePlaylist, setShowCreatePlaylist] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [creating, setCreating] = useState(false)
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
 
   useEffect(() => {
-    loadPlaylists()
-  }, [])
+    generation.current++
+    setNextCursor(null)
+    const timer = setTimeout(() => { void loadPlaylists() }, 200)
+    return () => { clearTimeout(timer); generation.current++ }
+  }, [searchQuery, sort, filter])
 
-  const loadPlaylists = async () => {
+  const loadPlaylists = async (cursor?: string | null) => {
+    const requestGeneration = generation.current
     try {
-      setLoading(true)
-      const res = await playlistsApi.list()
-      setPlaylists(res.playlists)
+      if (!cursor) { setLoading(true); setNextCursor(null) }
+      setListError('')
+      const res = await playlistsApi.list(undefined, { cursor, search: searchQuery, sort, filter })
+      if (requestGeneration !== generation.current) return
+      setPlaylists(previous => cursor ? appendUnique(previous, res.playlists) : res.playlists)
+      setNextCursor(res.next_cursor)
     } catch (err) {
-      console.error('Failed to load playlists:', err)
+      if (requestGeneration === generation.current) setListError(err instanceof Error ? err.message : 'Could not load playlists')
     } finally {
-      setLoading(false)
+      if (requestGeneration === generation.current) setLoading(false)
     }
   }
 
@@ -38,17 +52,13 @@ export default function PlaylistsPage() {
       setShowCreatePlaylist(false)
       loadPlaylists()
     } catch (err) {
-      console.error('Failed to create playlist:', err)
+      setListError(err instanceof Error ? err.message : 'Could not create playlist')
     } finally {
       setCreating(false)
     }
   }
 
-  // Filter playlists by search query
-  const filteredPlaylists = playlists.filter(playlist =>
-    searchQuery === '' ||
-    playlist.title.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  const filteredPlaylists = playlists
 
   return (
     <div>
@@ -75,11 +85,23 @@ export default function PlaylistsPage() {
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
+          aria-label="Search playlists"
           placeholder="Search playlists by title..."
           className="w-full rounded-lg border border-surface-700 bg-surface-800 px-4 py-2 text-white placeholder-surface-500 focus:border-primary-500 focus:outline-none"
         />
       </div>
 
+      <div className="mb-4 flex gap-3">
+        <select aria-label="Sort playlists" value={sort} onChange={e => setSort(e.target.value)} className="rounded bg-surface-800 p-2">
+          <option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="title">Title</option>
+        </select>
+        <select aria-label="Filter playlists" value={filter} onChange={e => setFilter(e.target.value)} className="rounded bg-surface-800 p-2">
+          <option value="">All</option>
+          { ['ALBUM', 'EP', 'SINGLE', 'PLAYLIST'].map(value => <option key={value}>{value}</option>) }
+        </select>
+      </div>
+      {listError && <p role="alert">{listError} <button onClick={() => loadPlaylists()}>Retry</button></p>}
+      <PageControls cursor={nextCursor} load={() => loadPlaylists(nextCursor)} />
       {/* Loading state */}
       {loading ? (
         <div className="flex items-center justify-center py-12">
@@ -109,7 +131,7 @@ export default function PlaylistsPage() {
               {/* Menu button */}
               <div className="absolute top-2 right-2 z-10">
                 <button
-                  onClick={(e) => {
+                  aria-label="Playlist actions" onClick={(e) => {
                     e.preventDefault()
                     e.stopPropagation()
                     setOpenMenuId(openMenuId === playlist.id ? null : playlist.id)

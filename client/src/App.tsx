@@ -1,21 +1,21 @@
-import { useEffect } from 'react'
+import { useEffect, lazy, Suspense } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import { useAuthStore } from './stores/authStore'
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
-import Dashboard from './pages/Dashboard'
-import TracksPage from './pages/TracksPage'
-import PlaylistsPage from './pages/PlaylistsPage'
-import Login from './pages/Login'
-import Register from './pages/Register'
-import TrackDetail from './pages/TrackDetail'
-import PlaylistDetail from './pages/PlaylistDetail'
-import SharedTrackPage from './pages/SharedTrackPage'
-import SharedPlaylistPage from './pages/SharedPlaylistPage'
-import UserSettings from './pages/UserSettings'
-import AdminLayout from './pages/admin/AdminLayout'
-import UserManagement from './pages/admin/UserManagement'
-import SystemSettings from './pages/admin/SystemSettings'
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const TracksPage = lazy(() => import('./pages/TracksPage'))
+const PlaylistsPage = lazy(() => import('./pages/PlaylistsPage'))
+const Login = lazy(() => import('./pages/Login'))
+const Register = lazy(() => import('./pages/Register'))
+const TrackDetail = lazy(() => import('./pages/TrackDetail'))
+const PlaylistDetail = lazy(() => import('./pages/PlaylistDetail'))
+const SharedTrackPage = lazy(() => import('./pages/SharedTrackPage'))
+const SharedPlaylistPage = lazy(() => import('./pages/SharedPlaylistPage'))
+const UserSettings = lazy(() => import('./pages/UserSettings'))
+const AdminLayout = lazy(() => import('./pages/admin/AdminLayout'))
+const UserManagement = lazy(() => import('./pages/admin/UserManagement'))
+const SystemSettings = lazy(() => import('./pages/admin/SystemSettings'))
 
 function App() {
   const checkAuth = useAuthStore((state) => state.checkAuth)
@@ -25,7 +25,7 @@ function App() {
   }, [checkAuth])
 
   return (
-    <Routes>
+    <Suspense fallback={<div role="status" className="p-8 text-white">Loading…</div>}><Routes>
       {/* Public routes */}
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
@@ -63,7 +63,7 @@ function App() {
         <Route index element={<UserManagement />} />
         <Route path="settings" element={<SystemSettings />} />
       </Route>
-    </Routes>
+    </Routes></Suspense>
   )
 }
 

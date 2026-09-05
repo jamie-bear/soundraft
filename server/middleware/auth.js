@@ -1,3 +1,4 @@
+const { logError } = require('../lib/logging');
 const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -125,7 +126,7 @@ function checkOwnership(getOwnerId) {
 
             next();
         } catch (err) {
-            console.error('Ownership check error:', err);
+            logError('Ownership check error:', err);
             res.status(500).json({ error: 'Server error' });
         }
     };
@@ -171,7 +172,7 @@ function checkShareAccess(getResource) {
 
             return res.status(403).json({ error: 'Access denied' });
         } catch (err) {
-            console.error('Share access check error:', err);
+            logError('Share access check error:', err);
             res.status(500).json({ error: 'Server error' });
         }
     };

@@ -1,3 +1,5 @@
+import PageControls from '../components/PageControls'
+import { appendUnique } from '../lib/pages'
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { tracksApi, commentsApi, attachmentsApi, Track, TrackVersion, Comment, Attachment, getAssetUrl } from '../lib/api'
@@ -30,8 +32,11 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
   const togglePlay = usePlayerStore((state) => state.togglePlay)
   
   const [track, setTrack] = useState<Track | null>(null)
+  const [versionCursor, setVersionCursor] = useState<string | null>(null)
+  const [attachmentCursor, setAttachmentCursor] = useState<string | null>(null)
   const [versions, setVersions] = useState<TrackVersion[]>([])
   const [comments, setComments] = useState<Comment[]>([])
+  const [commentCursor, setCommentCursor] = useState<string | null>(null)
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [isOwner, setIsOwner] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -45,6 +50,8 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
   const [isEditingArtist, setIsEditingArtist] = useState(false)
   const [editedArtist, setEditedArtist] = useState('')
   
+  const uploadController = useRef<AbortController | null>(null)
+  useEffect(() => () => uploadController.current?.abort(), [])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const titleInputRef = useRef<HTMLInputElement>(null)
   const artistInputRef = useRef<HTMLInputElement>(null)
@@ -72,17 +79,20 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
       setIsOwner(owner)
 
       // Load comments using new API
-      const { comments: commentsData, canPost } = await commentsApi.listTrackComments(trackData.id, shareToken)
+      const { comments: commentsData, next_cursor: commentsNext, canPost } = await commentsApi.listTrackComments(trackData.id, shareToken)
       setComments(commentsData)
+      setCommentCursor(commentsNext)
       setCanPostComments(canPost)
 
       // Load versions and attachments only for owner
       if (owner) {
-        const { versions: versionsData } = await tracksApi.getVersions(trackData.id)
+        const { versions: versionsData, next_cursor: versionsNext } = await tracksApi.getVersions(trackData.id)
         setVersions(versionsData)
+        setVersionCursor(versionsNext)
 
-        const { attachments: attachmentsData } = await attachmentsApi.list(trackData.id)
+        const { attachments: attachmentsData, next_cursor: attachmentsNext } = await attachmentsApi.list(trackData.id)
         setAttachments(attachmentsData)
+        setAttachmentCursor(attachmentsNext)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load track')
@@ -115,10 +125,11 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
     if (!file || !track) return
 
     try {
+      uploadController.current = new AbortController()
       setUploadProgress(0)
       await tracksApi.uploadVersion(track.id, file, (progress) => {
         setUploadProgress(progress)
-      })
+      }, uploadController.current.signal)
       setUploadProgress(null)
       loadTrack() // Reload to get new version
     } catch (err) {
@@ -265,7 +276,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
     )
   }
 
-  if (error || !track) {
+  if (!track) {
     return (
       <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-red-400">
         {error || 'Track not found'}
@@ -283,6 +294,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
 
   return (
     <div className="mx-auto max-w-3xl">
+      {error && <p role="alert" className="mb-4 rounded border border-red-500/20 bg-red-500/10 p-3 text-red-300">{error} <button onClick={() => setError('')} className="ml-2 underline">Dismiss</button></p>}
       {/* Track Card */}
       <div className="rounded-2xl bg-surface-900 p-4 sm:p-6">
         {/* Track Header */}
@@ -358,7 +370,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
             {/* Editable Title */}
             {isEditingTitle ? (
               <input
-                ref={titleInputRef}
+                aria-label="Title" ref={titleInputRef}
                 type="text"
                 value={editedTitle}
                 onChange={(e) => setEditedTitle(e.target.value)}
@@ -379,7 +391,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
             {/* Editable Artist */}
             {isEditingArtist ? (
               <input
-                ref={artistInputRef}
+                aria-label="Artist" ref={artistInputRef}
                 type="text"
                 value={editedArtist}
                 onChange={(e) => setEditedArtist(e.target.value)}
@@ -430,6 +442,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
             {/* Owner Action Buttons */}
             {isOwner && (
               <div className="mt-3 flex flex-wrap justify-center sm:justify-start gap-2">
+                {uploadProgress !== null && <button type="button" onClick={() => uploadController.current?.abort()} className="mr-3 underline">Cancel upload</button>}
                 {uploadProgress !== null ? (
                   // Upload progress indicator
                   <div className="inline-flex items-center gap-2 rounded-md bg-surface-800 px-3 py-1.5 min-w-[160px]">
@@ -440,7 +453,7 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
                       />
                     </div>
                     <span className="text-xs font-medium text-surface-300 tabular-nums">
-                      {uploadProgress}%
+                      {uploadProgress === 100 ? 'Processing and saving…' : `${uploadProgress}% uploaded`}
                     </span>
                   </div>
                 ) : (
@@ -572,6 +585,11 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
 
               {/* Comment Section */}
               <CommentSection
+                nextCursor={commentCursor}
+                onLoadMore={async () => {
+                  const page = await commentsApi.listTrackComments(track!.id, shareToken, { cursor: commentCursor })
+                  setComments(previous => appendUnique(previous, page.comments)); setCommentCursor(page.next_cursor)
+                }}
                 entityType="track"
                 entityId={track.id}
                 comments={comments}
@@ -587,7 +605,9 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
           )}
 
           {activeTab === 'versions' && isOwner && (
-            <VersionList
+            <><PageControls cursor={versionCursor} load={async () => {
+              const page = await tracksApi.getVersions(track!.id, { cursor: versionCursor }); setVersions(previous => appendUnique(previous, page.versions)); setVersionCursor(page.next_cursor)
+            }} /><VersionList
               trackId={track.id}
               currentVersionId={track.current_version_id}
               versions={versions}
@@ -604,15 +624,17 @@ export default function TrackDetail({ shared = false }: TrackDetailProps) {
                   })
                 }
               }}
-            />
+            /></>
           )}
 
           {activeTab === 'attachments' && isOwner && (
-            <AttachmentList
+            <><PageControls cursor={attachmentCursor} load={async () => {
+              const page = await attachmentsApi.list(track!.id, { cursor: attachmentCursor }); setAttachments(previous => appendUnique(previous, page.attachments)); setAttachmentCursor(page.next_cursor)
+            }} /><AttachmentList reorderEnabled={!attachmentCursor}
               trackId={track.id}
               attachments={attachments}
               onAttachmentsChange={setAttachments}
-            />
+            /></>
           )}
 
           {activeTab === ('delete' as any) && isOwner && (

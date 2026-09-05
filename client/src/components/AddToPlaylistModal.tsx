@@ -1,3 +1,5 @@
+import PageControls from './PageControls'
+import { appendUnique } from '../lib/pages'
 import { useState, useEffect } from 'react'
 import { playlistsApi, PlaylistWithTrackInfo } from '../lib/api'
 
@@ -15,6 +17,7 @@ export default function AddToPlaylistModal({
   onClose,
 }: AddToPlaylistModalProps) {
   const [playlists, setPlaylists] = useState<PlaylistWithTrackInfo[]>([])
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<string | null>(null)
   const [error, setError] = useState('')
@@ -27,12 +30,13 @@ export default function AddToPlaylistModal({
     }
   }, [isOpen, trackId])
 
-  const loadPlaylists = async () => {
+  const loadPlaylists = async (cursor?: string | null) => {
     setLoading(true)
     setError('')
     try {
-      const { playlists: data } = await playlistsApi.list(trackId)
-      setPlaylists(data)
+      const { playlists: data, next_cursor } = await playlistsApi.list(trackId, { cursor })
+      setPlaylists(previous => cursor ? appendUnique(previous, data) : data)
+      setNextCursor(next_cursor)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load playlists')
     } finally {
@@ -172,6 +176,7 @@ export default function AddToPlaylistModal({
           )}
 
           {/* Playlists list */}
+          <PageControls cursor={nextCursor} load={() => loadPlaylists(nextCursor)} />
           {loading ? (
             <div className="flex items-center justify-center py-8">
               <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />

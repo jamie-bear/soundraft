@@ -1,6 +1,8 @@
+const { logError } = require('./logging');
 'use strict';
 
 const DEFAULT_QUOTA = 20 * 1024 * 1024 * 1024;
+const { assertRequestActive, context } = require('./lifecycle');
 
 class StorageQuotaError extends Error {
     constructor() {
@@ -10,6 +12,7 @@ class StorageQuotaError extends Error {
 }
 
 async function stageStorageObject(pool, object) {
+    assertRequestActive();
     const client = await pool.connect();
     const quotaBytes = Number(object.quotaBytes || process.env.USER_STORAGE_QUOTA_BYTES || DEFAULT_QUOTA);
     try {
@@ -37,6 +40,7 @@ async function stageStorageObject(pool, object) {
 }
 
 async function activateStorageObject(client, storageKey, resourceType, resourceId) {
+    assertRequestActive();
     const result = await client.query(`
         UPDATE storage_objects
         SET state = 'ACTIVE', resource_type = $2, resource_id = $3,
@@ -63,6 +67,7 @@ function createObjectReconciler(pool, minioClient, options = {}) {
     const stageTtlMinutes = Number(options.stageTtlMinutes || 60);
     let timer;
     let running = false;
+    let controller;
 
     async function finish(id, storageKey) {
         const client = await pool.connect();
@@ -93,13 +98,18 @@ function createObjectReconciler(pool, minioClient, options = {}) {
                 next_attempt_at = CURRENT_TIMESTAMP + LEAST(INTERVAL '1 hour', INTERVAL '5 seconds' * power(2, LEAST(attempts, 10))),
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = $1
-        `, [id, String(error.message || error).slice(0, 2000)]);
+        `, [id, String(error.code || 'STORAGE_DELETE_FAILED').slice(0, 80)]);
     }
 
-    async function runOnce() {
+    async function performRun() {
         if (running) return;
         running = true;
+        let guard;
         try {
+            guard = await pool.connect();
+            // Session lock survives time spent streaming objects between queries.
+            const lock = await guard.query("SELECT pg_try_advisory_lock(hashtext('soundraft:exports')) AS acquired");
+            if (!lock.rows[0].acquired) return;
             // Old cover records were backfilled without a known size. Repair in
             // bounded batches so quotas/admin usage eventually include them.
             const legacy = await pool.query(`SELECT storage_key, bucket FROM storage_objects
@@ -114,7 +124,7 @@ function createObjectReconciler(pool, minioClient, options = {}) {
                     // Rotate failures to the back of the batch, without deleting
                     // a referenced object or starving later legacy records.
                     await pool.query('UPDATE storage_objects SET updated_at = CURRENT_TIMESTAMP WHERE storage_key = $1', [object.storage_key]);
-                    console.error('Legacy object size check failed:', error.message);
+                    logError('Legacy object size check failed:', error);
                 }
             }
             await pool.query(`
@@ -138,7 +148,7 @@ function createObjectReconciler(pool, minioClient, options = {}) {
                 )
                 RETURNING id, storage_key, bucket
             `, [batchSize]);
-            await Promise.all(claimed.rows.map(async (row) => {
+            const outcomes = await Promise.allSettled(claimed.rows.map(async (row) => {
                 try {
                     await minioClient.removeObject(row.bucket, row.storage_key);
                     await finish(row.id, row.storage_key);
@@ -150,20 +160,32 @@ function createObjectReconciler(pool, minioClient, options = {}) {
                     }
                 }
             }));
+            const failure = outcomes.find(result => result.status === 'rejected');
+            if (failure) throw failure.reason;
         } finally {
+            if (guard) { await guard.query("SELECT pg_advisory_unlock(hashtext('soundraft:exports'))").catch(() => {}); guard.release(); }
             running = false;
         }
     }
 
+    function runOnce() {
+        if (running) return Promise.resolve();
+        controller = new AbortController();
+        return context.run({ controller }, performRun);
+    }
     return {
         runOnce,
         start() {
             if (timer) return;
-            runOnce().catch((error) => console.error('Object reconciliation error:', error));
-            timer = setInterval(() => runOnce().catch((error) => console.error('Object reconciliation error:', error)), intervalMs);
+            runOnce().catch((error) => logError('Object reconciliation error:', error));
+            timer = setInterval(() => runOnce().catch((error) => logError('Object reconciliation error:', error)), intervalMs);
             timer.unref?.();
         },
-        stop() { clearInterval(timer); timer = undefined; },
+        async stop() {
+            clearInterval(timer); timer = undefined;
+            controller?.abort();
+            while (running) await new Promise(resolve => setTimeout(resolve, 20));
+        },
     };
 }
 

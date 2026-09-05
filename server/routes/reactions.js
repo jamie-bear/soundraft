@@ -1,3 +1,4 @@
+const { logError } = require('../lib/logging');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { optionalAuth } = require('../middleware/auth');
@@ -93,7 +94,7 @@ module.exports = function(pool) {
 
             res.json({ counts, visitorReaction });
         } catch (err) {
-            console.error('Get track reactions error:', err);
+            logError('Get track reactions error:', err);
             res.status(500).json({ error: 'Failed to get reactions' });
         }
     });
@@ -148,7 +149,7 @@ module.exports = function(pool) {
 
             res.json({ counts, visitorReaction });
         } catch (err) {
-            console.error('Get playlist reactions error:', err);
+            logError('Get playlist reactions error:', err);
             res.status(500).json({ error: 'Failed to get reactions' });
         }
     });
@@ -187,7 +188,7 @@ module.exports = function(pool) {
 
             res.json({ success: true, emojiType });
         } catch (err) {
-            console.error('Add track reaction error:', err);
+            logError('Add track reaction error:', err);
             res.status(500).json({ error: 'Failed to add reaction' });
         }
     });
@@ -226,7 +227,7 @@ module.exports = function(pool) {
 
             res.json({ success: true, emojiType });
         } catch (err) {
-            console.error('Add playlist reaction error:', err);
+            logError('Add playlist reaction error:', err);
             res.status(500).json({ error: 'Failed to add reaction' });
         }
     });
@@ -257,7 +258,7 @@ module.exports = function(pool) {
 
             res.json({ success: true });
         } catch (err) {
-            console.error('Delete track reaction error:', err);
+            logError('Delete track reaction error:', err);
             res.status(500).json({ error: 'Failed to remove reaction' });
         }
     });
@@ -288,7 +289,7 @@ module.exports = function(pool) {
 
             res.json({ success: true });
         } catch (err) {
-            console.error('Delete playlist reaction error:', err);
+            logError('Delete playlist reaction error:', err);
             res.status(500).json({ error: 'Failed to remove reaction' });
         }
     });

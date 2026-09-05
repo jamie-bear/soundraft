@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:browser": "playwright test",
+    "test:bundle": "node scripts/check-bundle.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.1.0",
@@ -20,6 +22,8 @@
     "zustand": "^4.4.7"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.63.0",
     "@types/howler": "^2.2.11",
     "@types/react": "^18.2.37",
     "@types/react-dom": "^18.2.15",

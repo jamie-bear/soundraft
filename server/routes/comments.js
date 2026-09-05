@@ -1,3 +1,4 @@
+const { logError } = require('../lib/logging');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { requireAuth, optionalAuth } = require('../middleware/auth');
@@ -119,7 +120,7 @@ module.exports = function(pool) {
 
             res.json({ comments, canPost: access.canPost, commentsHidden: false, next_cursor: page.next_cursor });
         } catch (err) {
-            console.error('List track comments error:', err);
+            logError('List track comments error:', err);
             res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to list comments' });
         }
     });
@@ -173,7 +174,7 @@ module.exports = function(pool) {
                 }
             });
         } catch (err) {
-            console.error('Add track comment error:', err);
+            logError('Add track comment error:', err);
             res.status(500).json({ error: 'Failed to add comment' });
         }
     });
@@ -219,7 +220,7 @@ module.exports = function(pool) {
 
             res.json({ comments, canPost: access.canPost, commentsHidden: false, next_cursor: page.next_cursor });
         } catch (err) {
-            console.error('List playlist comments error:', err);
+            logError('List playlist comments error:', err);
             res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to list comments' });
         }
     });
@@ -266,7 +267,7 @@ module.exports = function(pool) {
                 }
             });
         } catch (err) {
-            console.error('Add playlist comment error:', err);
+            logError('Add playlist comment error:', err);
             res.status(500).json({ error: 'Failed to add comment' });
         }
     });
@@ -309,7 +310,7 @@ module.exports = function(pool) {
 
             res.json({ success: true });
         } catch (err) {
-            console.error('Delete comment error:', err);
+            logError('Delete comment error:', err);
             res.status(500).json({ error: 'Failed to delete comment' });
         }
     });

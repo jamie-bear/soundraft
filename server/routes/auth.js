@@ -1,3 +1,4 @@
+const { logError } = require('../lib/logging');
 const express = require('express');
 const bcrypt = require('bcrypt');
 const rateLimit = require('express-rate-limit');
@@ -71,7 +72,7 @@ module.exports = function(pool) {
                 token
             });
         } catch (err) {
-            console.error('Registration error:', err);
+            logError('Registration error:', err);
             res.status(500).json({ error: 'Registration failed' });
         }
     });
@@ -130,7 +131,7 @@ module.exports = function(pool) {
                 token
             });
         } catch (err) {
-            console.error('Login error:', err);
+            logError('Login error:', err);
             res.status(500).json({ error: 'Login failed' });
         }
     });
@@ -152,7 +153,7 @@ module.exports = function(pool) {
 
             res.json({ user: result.rows[0] });
         } catch (err) {
-            console.error('Get user error:', err);
+            logError('Get user error:', err);
             res.status(500).json({ error: 'Failed to get user' });
         }
     });

@@ -1,3 +1,5 @@
+import PageControls from '../components/PageControls'
+import { appendUnique } from '../lib/pages'
 import { useState, useEffect, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
@@ -147,9 +149,11 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
   const isPlaying = usePlayerStore((state) => state.isPlaying)
   const togglePlay = usePlayerStore((state) => state.togglePlay)
 
+  const [trackCursor, setTrackCursor] = useState<string | null>(null)
   const [playlist, setPlaylist] = useState<Playlist | null>(null)
   const [tracks, setTracks] = useState<(Track & { sort_order: number })[]>([])
   const [comments, setComments] = useState<Comment[]>([])
+  const [commentCursor, setCommentCursor] = useState<string | null>(null)
   const [canPostComments, setCanPostComments] = useState(false)
   const [isOwner, setIsOwner] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -185,23 +189,30 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
       const identifier = playlistId || shareToken
       if (!identifier) return
 
-      const { playlist: playlistData, tracks: tracksData, isOwner: owner } = await playlistsApi.get(
+      const { playlist: playlistData, next_cursor: tracksNext, tracks: tracksData, isOwner: owner } = await playlistsApi.get(
         identifier,
         shareToken
       )
       setPlaylist(playlistData)
-      setTracks(tracksData.map((t, i) => ({ ...t, sort_order: i })))
+      setTracks(tracksData)
+      setTrackCursor(tracksNext)
       setIsOwner(owner)
 
       // Load comments
-      const { comments: commentsData, canPost } = await commentsApi.listPlaylistComments(playlistData.id, shareToken)
+      const { comments: commentsData, next_cursor: commentsNext, canPost } = await commentsApi.listPlaylistComments(playlistData.id, shareToken)
       setComments(commentsData)
+      setCommentCursor(commentsNext)
       setCanPostComments(canPost)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load playlist')
     } finally {
       setLoading(false)
     }
+  }
+
+  const moreTracks = async () => {
+    const page = await playlistsApi.get(playlist!.id, shareToken, { cursor: trackCursor })
+    setTracks(previous => appendUnique(previous, page.tracks)); setTrackCursor(page.next_cursor)
   }
 
   const handlePlay = (track: Track) => {
@@ -357,6 +368,7 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
   }
 
   const handleDragEnd = async (event: DragEndEvent) => {
+    if (trackCursor) { setError('Load the remaining tracks before reordering.'); return }
     const { active, over } = event
 
     if (!over || active.id === over.id || !playlist) return
@@ -369,13 +381,12 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
       sort_order: i,
     }))
 
-    setTracks(newTracks)
-
     try {
       await playlistsApi.reorder(
         playlist.id,
         newTracks.map((t) => t.id)
       )
+      setTracks(newTracks)
     } catch (err) {
       // Revert on error
       loadPlaylist()
@@ -391,7 +402,7 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
     )
   }
 
-  if (error || !playlist) {
+  if (!playlist) {
     return (
       <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-red-400">
         {error || 'Playlist not found'}
@@ -401,6 +412,8 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
 
   return (
     <div className="mx-auto max-w-3xl">
+      {error && <p role="alert" className="mb-4 rounded border border-red-500/20 bg-red-500/10 p-3 text-red-300">{error} <button onClick={() => setError('')} className="ml-2 underline">Dismiss</button></p>}
+      <PageControls cursor={trackCursor} load={moreTracks} reload={loadPlaylist} />
       {/* Playlist Header */}
       <div className="mb-8 flex flex-col sm:flex-row gap-6">
         {isOwner ? (
@@ -458,7 +471,7 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
           {/* Editable Title */}
           {isEditingTitle ? (
             <input
-              ref={titleInputRef}
+              aria-label="Title" ref={titleInputRef}
               type="text"
               value={editedTitle}
               onChange={(e) => setEditedTitle(e.target.value)}
@@ -479,7 +492,7 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
           {/* Editable Artist */}
           {isEditingArtist ? (
             <input
-              ref={artistInputRef}
+              aria-label="Artist" ref={artistInputRef}
               type="text"
               value={editedArtist}
               onChange={(e) => setEditedArtist(e.target.value)}
@@ -627,6 +640,11 @@ export default function PlaylistDetail({ shared = false }: PlaylistDetailProps) 
 
           {/* Comment Section */}
           <CommentSection
+                nextCursor={commentCursor}
+                onLoadMore={async () => {
+                  const page = await commentsApi.listPlaylistComments(playlist!.id, shareToken, { cursor: commentCursor })
+                  setComments(previous => appendUnique(previous, page.comments)); setCommentCursor(page.next_cursor)
+                }}
             entityType="playlist"
             entityId={playlist.id}
             comments={comments}

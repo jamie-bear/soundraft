@@ -1,3 +1,5 @@
+import PageControls from '../components/PageControls'
+import { appendUnique } from '../lib/pages'
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { playlistsApi, commentsApi, Playlist, Track, Comment, getAssetUrl } from '../lib/api'
@@ -13,9 +15,11 @@ export default function SharedPlaylistPage() {
   const isPlaying = usePlayerStore((state) => state.isPlaying)
   const togglePlay = usePlayerStore((state) => state.togglePlay)
 
+  const [trackCursor, setTrackCursor] = useState<string | null>(null)
   const [playlist, setPlaylist] = useState<Playlist | null>(null)
   const [tracks, setTracks] = useState<(Track & { sort_order: number })[]>([])
   const [comments, setComments] = useState<Comment[]>([])
+  const [commentCursor, setCommentCursor] = useState<string | null>(null)
   const [canPostComments, setCanPostComments] = useState(false)
   const [commentsHidden, setCommentsHidden] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -33,16 +37,18 @@ export default function SharedPlaylistPage() {
       setLoading(true)
       setError('')
 
-      const { playlist: playlistData, tracks: tracksData } = await playlistsApi.get(token!, token)
+      const { playlist: playlistData, next_cursor: tracksNext, tracks: tracksData } = await playlistsApi.get(token!, token)
       setPlaylist(playlistData)
-      setTracks(tracksData.map((t, i) => ({ ...t, sort_order: i })))
+      setTracks(tracksData)
+      setTrackCursor(tracksNext)
 
       // Load comments
-      const { comments: commentsData, canPost, commentsHidden: hidden } = await commentsApi.listPlaylistComments(
+      const { comments: commentsData, next_cursor: commentsNext, canPost, commentsHidden: hidden } = await commentsApi.listPlaylistComments(
         playlistData.id,
         token
       )
       setComments(commentsData)
+      setCommentCursor(commentsNext)
       setCanPostComments(canPost)
       setCommentsHidden(hidden || false)
     } catch (err) {
@@ -51,6 +57,11 @@ export default function SharedPlaylistPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const moreTracks = async () => {
+    const page = await playlistsApi.get(playlist!.id, token, { cursor: trackCursor })
+    setTracks(previous => appendUnique(previous, page.tracks)); setTrackCursor(page.next_cursor)
   }
 
   const handlePlay = (track: Track) => {
@@ -143,6 +154,7 @@ export default function SharedPlaylistPage() {
       {/* Main content */}
       <main className="flex-1 overflow-auto pb-24">
         <div className="mx-auto max-w-3xl px-4 py-8">
+          <PageControls cursor={trackCursor} load={moreTracks} reload={loadPlaylist} />
           {/* Playlist Card */}
           <div className="rounded-2xl bg-surface-900 p-6">
             {/* Playlist Header */}
@@ -327,6 +339,11 @@ export default function SharedPlaylistPage() {
                 </p>
               ) : (
                 <CommentSection
+                nextCursor={commentCursor}
+                onLoadMore={async () => {
+                  const page = await commentsApi.listPlaylistComments(playlist!.id, token, { cursor: commentCursor })
+                  setComments(previous => appendUnique(previous, page.comments)); setCommentCursor(page.next_cursor)
+                }}
                   entityType="playlist"
                   entityId={playlist.id}
                   comments={comments}

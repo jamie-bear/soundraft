@@ -1,3 +1,4 @@
+const { logError } = require('../lib/logging');
 const express = require('express');
 const fs = require('fs');
 const rateLimit = require('express-rate-limit');
@@ -37,7 +38,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, uploads) {
             await fs.promises.unlink(file.path);
         } catch (err) {
             if (err.code !== 'ENOENT') {
-                console.error('Attachment temp cleanup error:', err.message);
+                logError('Attachment temp cleanup error:', err.message);
             }
         }
     }
@@ -85,7 +86,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, uploads) {
             const page = pageResult(result.rows, limit, (row) => ({ sort_order: row.sort_order, created_at: row.created_at, id: row.id }));
             res.json({ attachments: page.items, next_cursor: page.next_cursor });
         } catch (err) {
-            console.error('List attachments error:', err);
+            logError('List attachments error:', err);
             res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to list attachments' });
         }
     });
@@ -94,7 +95,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, uploads) {
      * POST /api/attachments/track/:trackId
      * Upload an attachment (OWNER ONLY)
      */
-    router.post('/track/:trackId', requireAuth, attachmentUploadLimiter, uploadDeadline(15 * 60 * 1000), attachmentUpload.single('file'), async (req, res) => {
+    router.post('/track/:trackId', requireAuth, attachmentUploadLimiter, uploadDeadline(Number(process.env.UPLOAD_TIMEOUT_MS || 900_000)), attachmentUpload.single('file'), async (req, res) => {
         let storageKey;
         try {
             const { trackId } = req.params;
@@ -166,7 +167,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, uploads) {
 
             res.status(201).json({ attachment: result.rows[0] });
         } catch (err) {
-            console.error('Upload attachment error:', err);
+            logError('Upload attachment error:', err);
             if (storageKey) await abandonStorageObject(pool, storageKey, BUCKET_NAME).catch(() => {});
             res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to upload attachment' });
         } finally {
@@ -187,7 +188,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, uploads) {
             }, '5m');
             res.json({ url: `/api/attachments/${encodeURIComponent(req.params.id)}/download?grant=${encodeURIComponent(grant)}` });
         } catch (error) {
-            console.error('Attachment grant error:', error);
+            logError('Attachment grant error:', error);
             res.status(500).json({ error: 'Failed to create download grant' });
         }
     });
@@ -232,7 +233,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, uploads) {
                 headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': stat.size },
             });
         } catch (err) {
-            console.error('Download attachment error:', err);
+            logError('Download attachment error:', err);
             streamFailure(res, err, 'Failed to download attachment');
         }
     });
@@ -284,7 +285,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, uploads) {
 
             res.json({ attachment: updated.rows[0] });
         } catch (err) {
-            console.error('Rename attachment error:', err);
+            logError('Rename attachment error:', err);
             res.status(500).json({ error: 'Failed to rename attachment' });
         }
     });
@@ -348,7 +349,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, uploads) {
                 client.release();
             }
         } catch (err) {
-            console.error('Reorder attachments error:', err);
+            logError('Reorder attachments error:', err);
             res.status(500).json({ error: 'Failed to reorder attachments' });
         }
     });
@@ -385,7 +386,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, uploads) {
 
             res.json({ success: true });
         } catch (err) {
-            console.error('Delete attachment error:', err);
+            logError('Delete attachment error:', err);
             res.status(500).json({ error: 'Failed to delete attachment' });
         }
     });

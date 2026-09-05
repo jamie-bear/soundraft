@@ -176,3 +176,7 @@ Caddy will automatically request and renew TLS certificates.
 ## License
 
 See [LICENSE](LICENSE) for details.
+
+## Reliability and release verification
+
+See [the reliability implementation notes](docs/reliability-implementation-2026-09-05.md) for paging and grant semantics, lifecycle budgets, the real-service recovery gate, benchmarks, and operations tooling. Migration 006 and the matching API/client must ship together.

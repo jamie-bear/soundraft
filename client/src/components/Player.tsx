@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { usePlayerStore } from '../stores/playerStore'
 
 export default function Player() {
-  const { currentTrack, queue, queueIndex, isPlaying, progress, volume, togglePlay, seek, setVolume, playNext, playPrevious } = usePlayerStore()
+  const { status, error, retry, currentTrack, queue, queueIndex, isPlaying, progress, volume, togglePlay, seek, setVolume, playNext, playPrevious } = usePlayerStore()
   const [showVolume, setShowVolume] = useState(false)
 
   const hasNext = queue.length > 0 && queueIndex >= 0 && queueIndex < queue.length - 1
@@ -17,6 +17,10 @@ export default function Player() {
 
   return (
     <footer className="border-t border-surface-800 bg-surface-900 px-3 sm:px-4 py-2 sm:py-3">
+      <div role="status" aria-live="polite" className="text-sm text-surface-300">
+        {status === 'loading' ? 'Buffering audio…' : error}
+        {(status === 'error' || status === 'offline') && <button onClick={retry} className="ml-3 underline">Retry playback</button>}
+      </div>
       {/* Mobile layout (stacked) */}
       <div className="flex flex-col gap-2 sm:hidden">
         {/* Top row: track info + play controls */}
@@ -40,14 +44,14 @@ export default function Player() {
                 </div>
               </>
             ) : (
-              <p className="text-sm text-surface-500">No track selected</p>
+              <p className="text-sm text-surface-400">No track selected</p>
             )}
           </div>
 
           {/* Play controls (compact) + mobile volume toggle */}
           <div className="flex items-center gap-1">
             <button
-              onClick={() => setShowVolume(!showVolume)}
+              aria-label="Show volume" onClick={() => setShowVolume(!showVolume)}
               className="flex h-11 w-11 items-center justify-center rounded-full active:bg-surface-700 text-surface-400 hover:text-white sm:hidden"
             >
               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -55,7 +59,7 @@ export default function Player() {
               </svg>
             </button>
             <button
-              onClick={playPrevious}
+              aria-label="Previous track" onClick={playPrevious}
               disabled={!currentTrack}
               className={`flex h-11 w-11 items-center justify-center rounded-full active:bg-surface-700 ${hasPrevious ? 'text-surface-400 hover:text-white' : 'text-surface-600'}`}
             >
@@ -64,7 +68,7 @@ export default function Player() {
               </svg>
             </button>
             <button
-              onClick={togglePlay}
+              aria-label={isPlaying ? "Pause" : "Play"} onClick={togglePlay}
               className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-surface-900 hover:scale-105 active:scale-95 transition-transform"
               disabled={!currentTrack}
             >
@@ -79,7 +83,7 @@ export default function Player() {
               )}
             </button>
             <button
-              onClick={playNext}
+              aria-label="Next track" onClick={playNext}
               disabled={!hasNext}
               className={`flex h-11 w-11 items-center justify-center rounded-full active:bg-surface-700 ${hasNext ? 'text-surface-400 hover:text-white' : 'text-surface-600'}`}
             >
@@ -97,7 +101,7 @@ export default function Player() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
             </svg>
             <input
-              type="range"
+              aria-label="Volume" type="range"
               min="0"
               max="1"
               step="0.01"
@@ -116,7 +120,7 @@ export default function Player() {
           </span>
           <div className="flex-1 py-2" style={{ touchAction: 'none' }}>
             <input
-              type="range"
+              aria-label="Playback position" type="range"
               min="0"
               max="1"
               step="0.001"
@@ -153,7 +157,7 @@ export default function Player() {
               </div>
             </>
           ) : (
-            <p className="text-sm text-surface-500">No track selected</p>
+            <p className="text-sm text-surface-400">No track selected</p>
           )}
         </div>
 
@@ -162,7 +166,7 @@ export default function Player() {
           <div className="flex items-center gap-4">
             {/* Previous */}
             <button
-              onClick={playPrevious}
+              aria-label="Previous track" onClick={playPrevious}
               disabled={!currentTrack}
               className={hasPrevious ? 'text-surface-400 hover:text-white' : 'text-surface-600'}
             >
@@ -173,7 +177,7 @@ export default function Player() {
 
             {/* Play/Pause */}
             <button
-              onClick={togglePlay}
+              aria-label={isPlaying ? "Pause" : "Play"} onClick={togglePlay}
               className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-surface-900 hover:scale-105 transition-transform"
               disabled={!currentTrack}
             >
@@ -190,7 +194,7 @@ export default function Player() {
 
             {/* Next */}
             <button
-              onClick={playNext}
+              aria-label="Next track" onClick={playNext}
               disabled={!hasNext}
               className={hasNext ? 'text-surface-400 hover:text-white' : 'text-surface-600'}
             >
@@ -206,7 +210,7 @@ export default function Player() {
               {formatTime(progress * (currentTrack?.duration || 0))}
             </span>
             <input
-              type="range"
+              aria-label="Playback position" type="range"
               min="0"
               max="1"
               step="0.001"
@@ -227,7 +231,7 @@ export default function Player() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
           </svg>
           <input
-            type="range"
+            aria-label="Volume" type="range"
             min="0"
             max="1"
             step="0.01"

@@ -32,3 +32,10 @@ minio_data/
 
 # Test coverage
 coverage/
+
+# Browser test outputs (may contain authenticated fixture state)
+client/test-results/
+client/playwright-report/
+
+# Isolated service test binaries/data
+.tmp/

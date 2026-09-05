@@ -1,9 +1,12 @@
+import PageControls from './PageControls'
 import { useState } from 'react'
 import { Comment, commentsApi } from '../lib/api'
 import { usePlayerStore } from '../stores/playerStore'
 import { useAuthStore } from '../stores/authStore'
 
 interface CommentSectionProps {
+  nextCursor?: string | null
+  onLoadMore?: () => Promise<void>
   entityType: 'track' | 'playlist'
   entityId: string
   comments: Comment[]
@@ -17,6 +20,7 @@ interface CommentSectionProps {
 }
 
 export default function CommentSection({
+  nextCursor, onLoadMore,
   entityType,
   entityId,
   comments,
@@ -65,6 +69,7 @@ export default function CommentSection({
   }
 
   const handleDelete = async (commentId: string) => {
+    if (!window.confirm('Delete this comment?')) return
     try {
       await commentsApi.delete(commentId)
       onCommentDeleted(commentId)
@@ -100,6 +105,7 @@ export default function CommentSection({
             type="text"
             value={newComment}
             onChange={(e) => setNewComment(e.target.value)}
+            aria-label="Comment"
             placeholder={isTrack ? "Add a comment (timestamped if playing)..." : "Add a comment..."}
             className="flex-1 rounded-lg border border-surface-700 bg-surface-800 px-3 py-2 text-white placeholder-surface-500 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
             disabled={submitting}
@@ -118,6 +124,7 @@ export default function CommentSection({
         </p>
       )}
 
+      {onLoadMore && <PageControls cursor={nextCursor} load={onLoadMore} />}
       {/* Comments list */}
       {comments.length === 0 ? (
         <p className="py-8 text-center text-surface-500">No comments yet</p>

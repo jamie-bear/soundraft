@@ -30,5 +30,7 @@ if [ -f "$BACKUP_DIR/secrets.env.age" ] && [ -n "${RESTORE_AGE_IDENTITY:-}" ] &&
   [ ! -e "$RESTORE_SECRETS_OUTPUT" ] || { echo 'Refusing to overwrite secrets output' >&2; exit 1; }
   age -d -i "$RESTORE_AGE_IDENTITY" -o "$RESTORE_SECRETS_OUTPUT" "$BACKUP_DIR/secrets.env.age"
 fi
+# Receipt records successful full inventory comparison; it is not a backup itself.
+printf '{"status":"verified","verified_at":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OVERRIDE.receipt.json"
 echo 'Verified restore complete; API remains stopped. Keep using this override:'
 printf 'COMPOSE_FILE=%q docker compose up -d api\n' "$COMPOSE_FILE"

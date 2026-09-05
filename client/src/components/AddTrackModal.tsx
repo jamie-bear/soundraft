@@ -1,3 +1,5 @@
+import PageControls from './PageControls'
+import { appendUnique } from '../lib/pages'
 import { useState, useEffect } from 'react'
 import { tracksApi, playlistsApi, Track } from '../lib/api'
 
@@ -20,6 +22,7 @@ export default function AddTrackModal({
 }: AddTrackModalProps) {
   const [tracks, setTracks] = useState<Track[]>([])
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(new Set())
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -37,14 +40,17 @@ export default function AddTrackModal({
     }
   }, [isOpen])
 
-  const loadTracks = async () => {
+  useEffect(() => { if (!isOpen) return; const timer = setTimeout(() => loadTracks(), 200); return () => clearTimeout(timer) }, [search])
+
+  const loadTracks = async (cursor?: string | null) => {
     setLoading(true)
     setError('')
     try {
-      const { tracks: data } = await tracksApi.list()
+      const { tracks: data, next_cursor } = await tracksApi.list({ cursor, search })
       // Filter out tracks already in the playlist
       const availableTracks = data.filter(t => !existingTrackIds.includes(t.id))
-      setTracks(availableTracks)
+      setTracks(previous => cursor ? appendUnique(previous, availableTracks) : availableTracks)
+      setNextCursor(next_cursor)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load tracks')
     } finally {
@@ -193,6 +199,7 @@ export default function AddTrackModal({
             </button>
           )}
 
+          <PageControls cursor={nextCursor} load={() => loadTracks(nextCursor)} />
           {loading ? (
             <div className="flex items-center justify-center py-8">
               <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />

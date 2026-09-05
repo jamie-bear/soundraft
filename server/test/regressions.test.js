@@ -62,7 +62,8 @@ test('source stream failure aborts the download instead of completing a truncate
 });
 
 test('empty library export uses the installed Archiver API and yields a complete ZIP', async () => {
-    const pool = { query: async query => ({ rows: query.text.includes('FROM users') ? [{ is_active: true, auth_version: 1 }] : [] }) };
+    const pool = { query: async query => ({ rows: (query.text || String(query)).includes('FROM users') ? [{ is_active: true, auth_version: 1 }] : [] }) };
+    pool.connect = async () => ({ query: pool.query, release() {} });
     const router = require('../routes/export')(pool, {}, 'test');
     const grant = issueGrant({ purpose: 'library-export', mode: 'tracks', user_id: 'test', auth_version: 1 });
     await serve(router, async base => {
@@ -75,9 +76,10 @@ test('empty library export uses the installed Archiver API and yields a complete
 });
 
 test('export does not silently skip a missing referenced object', async () => {
-    const pool = { query: async query => ({ rows: query.text.includes('FROM users') ? [{ is_active: true, auth_version: 1 }]
-        : query.text.includes('FROM tracks WHERE') ? [{ id: 'track', title: 'Track' }]
-        : query.text.includes('FROM track_versions') ? [{ id: 'version', version_number: 1, filename: 'lost.wav', storage_key: 'lost' }] : [] }) };
+    const pool = { query: async query => ({ rows: (query.text || String(query)).includes('FROM users') ? [{ is_active: true, auth_version: 1 }]
+        : (query.text || String(query)).includes('FROM tracks WHERE') ? [{ id: 'track', title: 'Track' }]
+        : (query.text || String(query)).includes('FROM track_versions') ? [{ id: 'version', version_number: 1, filename: 'lost.wav', storage_key: 'lost' }] : [] }) };
+    pool.connect = async () => ({ query: pool.query, release() {} });
     const router = require('../routes/export')(pool, { getObject: async () => { throw Error('NoSuchKey'); } }, 'test');
     const grant = issueGrant({ purpose: 'library-export', mode: 'tracks', user_id: 'test', auth_version: 1 });
     await serve(router, async base => { await assert.rejects(async () => { const response = await fetch(`${base}/library?grant=${grant}`); await response.arrayBuffer(); }); });

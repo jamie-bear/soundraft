@@ -62,9 +62,18 @@ jobs:
           npm test
           npm audit --audit-level=high
 
+      - name: Start isolated MinIO
+        run: |
+          docker run -d --name soundraft-minio -p 127.0.0.1:9000:9000 -e MINIO_ROOT_USER=integration-key -e MINIO_ROOT_PASSWORD=integration-secret-only minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          for attempt in $(seq 1 60); do curl -fsS http://127.0.0.1:9000/minio/health/ready && break; sleep 1; done
+          curl -fsS http://127.0.0.1:9000/minio/health/ready
+
       - name: PostgreSQL migration and API integration tests
         working-directory: ./server
         env:
+          TEST_REAL_STORAGE: 'true'
+          RUN_BENCHMARK: 'true'
+          TEST_S3_ENDPOINT: http://127.0.0.1:9000
           TEST_DATABASE_URL: postgresql://soundraft:test-password@localhost:5432/soundraft_test
           JWT_SECRET: ci-only-jwt-secret-with-at-least-thirty-two-characters
           S3_ACCESS_KEY: ci-access-key
@@ -85,11 +94,34 @@ jobs:
         working-directory: ./client
         run: |
           npm run build
+          npm run test:bundle
           npm audit --audit-level=high
+
+      - name: Publish sanitized query-plan and timing artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: query-budgets
+          path: docs/benchmarks/reliability.json
+          if-no-files-found: error
+
+  recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+        working-directory: client
+      - run: npx playwright install --with-deps chromium
+        working-directory: client
+      - name: Real-service browser and recovery gate
+        run: bash scripts/real-service-gate.sh
 
   build:
     runs-on: ubuntu-latest
-    needs: [secrets, quality]
+    needs: [secrets, quality, recovery]
     permissions:
       contents: read
       packages: write

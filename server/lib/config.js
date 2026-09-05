@@ -53,6 +53,8 @@ function validateConfig(env = process.env) {
     validateResourceGrantTtl(env.RESOURCE_GRANT_TTL);
     for (const key of ['AUDIO_UPLOAD_MAX_BYTES', 'ATTACHMENT_UPLOAD_MAX_BYTES', 'COVER_UPLOAD_MAX_BYTES',
         'USER_STORAGE_QUOTA_BYTES', 'OBJECT_RECONCILE_INTERVAL_MS', 'OBJECT_RECONCILE_BATCH_SIZE',
+        'DB_POOL_SIZE', 'DB_ACQUIRE_TIMEOUT_MS', 'DB_STATEMENT_TIMEOUT_MS', 'DB_TRANSACTION_IDLE_TIMEOUT_MS',
+        'SHUTDOWN_TIMEOUT_MS', 'STORAGE_TIMEOUT_MS', 'UPLOAD_TIMEOUT_MS', 'MAX_CONCURRENT_UPLOADS', 'MAX_CONCURRENT_EXPORTS', 'MAX_EXPORT_ENTRIES',
         'OBJECT_STAGE_TTL_MINUTES', 'EXPORT_QUERY_TIMEOUT_MS', 'EXPORT_TIMEOUT_MS']) {
         if (env[key] !== undefined && (!Number.isSafeInteger(Number(env[key])) || Number(env[key]) <= 0)) {
             throw new Error(`${key} must be a positive integer`);

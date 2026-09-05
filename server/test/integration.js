@@ -17,23 +17,29 @@ exports.run = async function() {
     if (url.pathname !== '/soundraft_test') throw Error('Integration tests require a fresh database named soundraft_test; existing databases are never reset');
     Object.assign(process.env, { DATABASE_URL: process.env.TEST_DATABASE_URL,
         JWT_SECRET: 'integration-only-secret-at-least-thirty-two-characters',
-        S3_ENDPOINT: 'http://127.0.0.1:9000', S3_ACCESS_KEY: 'integration-key', S3_SECRET_KEY: 'integration-secret-only',
+        S3_ENDPOINT: process.env.TEST_S3_ENDPOINT || 'http://127.0.0.1:9000', S3_ACCESS_KEY: process.env.TEST_S3_ACCESS_KEY || 'integration-key', S3_SECRET_KEY: process.env.TEST_S3_SECRET_KEY || 'integration-secret-only',
         S3_BUCKET: 'custom-integration-bucket', ADMIN_EMAIL: 'test@example.com', ADMIN_PASSWORD: 'test-only-admin-password' });
     const { app, pool, minioClient, BUCKET_NAME } = require('../index');
     const { generateToken } = require('../middleware/auth');
     const { migrate } = require('../lib/migrations');
     const { stageStorageObject, abandonStorageObject, activateStorageObject, createObjectReconciler } = require('../lib/object-lifecycle');
     const objects = new Map();
+    const realStorage = process.env.TEST_REAL_STORAGE === 'true';
+    const real = Object.fromEntries(['fPutObject','statObject','getObject','getPartialObject','removeObject'].map(name => [name, minioClient[name].bind(minioClient)]));
+    if (realStorage) {
+        assert.equal(await minioClient.bucketExists(BUCKET_NAME), false, 'Refusing to use an existing real-service test bucket');
+        await minioClient.makeBucket(BUCKET_NAME);
+    }
     // PostgreSQL and HTTP are real; only the object transport is deterministic.
-    minioClient.fPutObject = async (bucket, key, filename) => { assert.equal(bucket, BUCKET_NAME); objects.set(key, await fs.promises.readFile(filename)); };
+    minioClient.fPutObject = async (bucket, key, filename) => { assert.equal(bucket, BUCKET_NAME); objects.set(key, await fs.promises.readFile(filename)); if (realStorage) await real.fPutObject(bucket, key, filename); };
     minioClient.statObject = async (bucket, key) => {
         assert.equal(bucket, BUCKET_NAME);
         if (!objects.has(key)) throw Object.assign(Error('Not found'), { code: 'NoSuchKey' });
-        return { size: objects.get(key).length, metaData: {} };
+        return realStorage ? real.statObject(bucket, key) : { size: objects.get(key).length, metaData: {} };
     };
-    minioClient.getObject = async (bucket, key) => { await minioClient.statObject(bucket, key); return Readable.from([objects.get(key)]); };
-    minioClient.getPartialObject = async (bucket, key, start, length) => { await minioClient.statObject(bucket, key); return Readable.from([objects.get(key).subarray(start, start + length)]); };
-    minioClient.removeObject = async (bucket, key) => { assert.equal(bucket, BUCKET_NAME); objects.delete(key); };
+    minioClient.getObject = async (bucket, key) => { await minioClient.statObject(bucket, key); return realStorage ? real.getObject(bucket, key) : Readable.from([objects.get(key)]); };
+    minioClient.getPartialObject = async (bucket, key, start, length) => { await minioClient.statObject(bucket, key); return realStorage ? real.getPartialObject(bucket, key, start, length) : Readable.from([objects.get(key).subarray(start, start + length)]); };
+    minioClient.removeObject = async (bucket, key) => { assert.equal(bucket, BUCKET_NAME); objects.delete(key); if (realStorage) await real.removeObject(bucket, key); };
     let server;
     try {
         const tables = await pool.query("SELECT 1 FROM information_schema.tables WHERE table_schema = 'public'");
@@ -86,6 +92,36 @@ exports.run = async function() {
         assert.equal((await fetch(base + shared.tracks[0].stream_url)).status, 200);
         assert.equal((await api(`/api/tracks/${track.id}`, 'GET', undefined, false)).status, 401);
         console.log('PASS: anonymous playlist playback without making its underlying private track public');
+        const visitorUser = (await pool.query("INSERT INTO users(email,password_hash) VALUES ('visitor@example.com','test') RETURNING *")).rows[0];
+        const visitorToken = generateToken(visitorUser);
+        assert.equal((await fetch(base + `/api/tracks/${track.id}`, { headers: { Authorization: `Bearer ${visitorToken}` } })).status, 403);
+        assert.equal((await fetch(base + '/api/media/renew', { method: 'POST', headers: { Authorization: `Bearer ${visitorToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ versionId: versions[0].id }) })).status, 403);
+
+
+        const renewal = await api('/api/media/renew', 'POST', { versionId: versions[0].id,
+            share: { type: 'playlist', token: playlist.share_token } }, false);
+        assert.equal(renewal.status, 200);
+        await api(`/api/playlists/${playlist.id}`, 'PUT', { is_public: false });
+        assert.equal((await api('/api/media/renew', 'POST', { versionId: versions[0].id,
+            share: { type: 'playlist', token: playlist.share_token } }, false)).status, 403);
+        assert.equal((await api('/api/media/renew', 'POST', { versionId: versions[0].id })).status, 200);
+        const listed = await (await api('/api/tracks?limit=1&search=New')).json();
+        assert.equal(listed.tracks.length, 1); assert.equal(listed.tracks[0].id, track.id);
+        assert.equal((await api('/api/tracks?sort=invalid')).status, 400);
+        await api(`/api/playlists/${playlist.id}/tracks`, 'POST', { trackId: legacy.id });
+        const playlistPage = await (await api(`/api/playlists/${playlist.id}?limit=1`)).json();
+        assert.equal(playlistPage.tracks.length, 1); assert.ok(playlistPage.next_cursor);
+        const playlistPage2 = await (await api(`/api/playlists/${playlist.id}?limit=1&cursor=${playlistPage.next_cursor}`)).json();
+        assert.notEqual(playlistPage.tracks[0].id, playlistPage2.tracks[0].id);
+        const beforeReorder = (await pool.query('SELECT revision FROM playlists WHERE id=$1', [playlist.id])).rows[0].revision;
+        assert.equal((await api(`/api/playlists/${playlist.id}/reorder`, 'PUT', { trackIds: [legacy.id, track.id] })).status, 200);
+        const afterReorder = (await pool.query('SELECT revision FROM playlists WHERE id=$1', [playlist.id])).rows[0].revision;
+        assert.equal(BigInt(afterReorder)-BigInt(beforeReorder), 1n, 'Bulk reorder increments the revision once per statement');
+        await api(`/api/playlists/${playlist.id}/tracks/${legacy.id}`, 'DELETE');
+        assert.equal((await api(`/api/playlists/${playlist.id}?cursor=${playlistPage.next_cursor}`)).status, 409);
+        for (let n = 0; n < 205; n++) assert.equal((await fetch(base + '/api/live')).status, 200);
+        console.log('PASS: authorized renewal, revoked share denial, bounded search, playlist revision cursors, unlimited liveness');
 
         const deleted = await Promise.all(versions.map(v => api(`/api/tracks/${track.id}/versions/${v.id}`, 'DELETE')));
         assert.deepEqual(deleted.map(r => r.status).sort(), [200, 400]);
@@ -100,12 +136,29 @@ exports.run = async function() {
         await stageStorageObject(pool, { storageKey: 'expired-object', bucket: BUCKET_NAME, ownerId: user.id, sizeBytes: 1 });
         await pool.query("UPDATE storage_objects SET created_at=NOW()-INTERVAL '2 hours' WHERE storage_key='expired-object'");
         objects.set('expired-object', Buffer.from('x'));
+        if (realStorage) await minioClient.putObject(BUCKET_NAME, 'expired-object', Buffer.from('x'));
         const reconciler = createObjectReconciler(pool, minioClient);
         await reconciler.runOnce();
         await assert.rejects(activateStorageObject(pool, 'expired-object', 'TRACK_VERSION', remaining[0].id), { statusCode: 409 });
         assert.equal(objects.has('expired-object'), false);
         assert.equal(objects.has(remaining[0].storage_key), true);
         console.log('PASS: stale staging is reclaimed, late activation rejected and live objects retained');
+
+        const normalPut = minioClient.fPutObject;
+        let releasePut, enteredPut;
+        const putEntered = new Promise(resolve => { enteredPut = resolve; });
+        const putWait = new Promise(resolve => { releasePut = resolve; });
+        minioClient.fPutObject = async (...args) => { enteredPut(); await putWait; return normalPut(...args); };
+        const cancel = new AbortController();
+        const cancelledForm = new FormData(); cancelledForm.append('audio', new Blob([wav()], { type: 'audio/wav' }), 'cancelled.wav');
+        const cancelledUpload = fetch(base + `/api/tracks/${track.id}/versions`, { method: 'POST',
+            headers: { Authorization: `Bearer ${token}` }, body: cancelledForm, signal: cancel.signal }).catch(() => null);
+        await putEntered; cancel.abort(); await cancelledUpload;
+        await new Promise(resolve => setTimeout(resolve, 25)); releasePut();
+        await new Promise(resolve => setTimeout(resolve, 100));
+        minioClient.fPutObject = normalPut;
+        assert.equal((await pool.query('SELECT id FROM track_versions WHERE track_id=$1', [track.id])).rowCount, 1);
+        console.log('PASS: cancellation during storage upload does not activate an audio version');
 
         const quotaUser = (await pool.query("INSERT INTO users(email,password_hash) VALUES ('quota@example.com','test') RETURNING id")).rows[0];
         const reservations = await Promise.allSettled(['quota-a', 'quota-b'].map(storageKey => stageStorageObject(pool, {
@@ -139,23 +192,60 @@ exports.run = async function() {
         assert.equal(stats.user.total_storage_bytes, bytes);
         assert.ok(Number(bytes) > wav().length + 'private notes'.length + 8);
         console.log('PASS: real cover processing and admin totals include audio, attachments and covers without join multiplication');
+        if (process.env.RUN_BENCHMARK === 'true') await require('./benchmark').run({ pool, base, api, userId: user.id, trackId: track.id });
         await pool.query('UPDATE users SET auth_version=auth_version+1 WHERE id=$1', [user.id]);
         assert.equal((await fetch(base + grant.url)).status, 403);
         assert.equal((await api('/api/tracks')).status, 401);
         console.log('PASS: disk attachments download correctly and session/download grants revoke immediately');
         await pool.query('DELETE FROM users WHERE id=$1', [user.id]);
+        const exportGuard = await pool.connect();
+        await exportGuard.query('BEGIN');
+        await exportGuard.query("SELECT pg_advisory_xact_lock_shared(hashtext('soundraft:exports'))");
+        await reconciler.runOnce();
+        assert.equal(objects.has(remaining[0].storage_key), true, 'Export retains objects after metadata deletion');
+        await exportGuard.query('ROLLBACK'); exportGuard.release();
         const queued = await pool.query('SELECT * FROM object_deletion_outbox WHERE processed_at IS NULL');
         assert.ok(queued.rowCount >= 3);
         assert.ok(queued.rows.every(r => r.bucket === BUCKET_NAME));
         const failing = createObjectReconciler(pool, { ...minioClient, removeObject: async () => { throw Error('offline'); } });
         await failing.runOnce();
         assert.ok((await pool.query('SELECT attempts,last_error FROM object_deletion_outbox WHERE processed_at IS NULL')).rows.every(r => r.attempts >= 1 && r.last_error));
+        await pool.query('UPDATE object_deletion_outbox SET attempts=3 WHERE processed_at IS NULL');
+        const operations = await require('../lib/operations').operationalStatus(pool);
+        assert.ok(operations.alerts.includes('deletion_backlog'));
         await pool.query('UPDATE object_deletion_outbox SET next_attempt_at=NOW()');
         await reconciler.runOnce();
         assert.equal((await pool.query('SELECT * FROM object_deletion_outbox WHERE processed_at IS NULL')).rowCount, 0);
         console.log('PASS: user cascades enqueue all objects in the correct bucket; failed deletions retry successfully');
+        if (realStorage) {
+            const { promisify } = require('node:util');
+            const execFile = promisify(require('node:child_process').execFile);
+            const os = require('node:os');
+            const { createHash } = require('node:crypto');
+            const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'soundraft-inventory-test-'));
+            try {
+                await minioClient.putObject(BUCKET_NAME, 'historical-orphan', Buffer.from('orphan recovery fixture'));
+                const script = path.join(__dirname, '../scripts/orphan-inventory.js');
+                const { stdout: inventory } = await execFile(process.execPath, [script]);
+                assert.ok(inventory.includes('historical-orphan'));
+                assert.equal((await real.statObject(BUCKET_NAME, 'historical-orphan')).size, 23);
+                const manifest = path.join(directory, 'inventory.jsonl');
+                await fs.promises.writeFile(manifest, inventory);
+                await assert.rejects(execFile(process.execPath, [script, 'quarantine', manifest, '0'.repeat(64)]));
+                const { stdout: receipt } = await execFile(process.execPath, [script, 'quarantine', manifest, createHash('sha256').update(inventory).digest('hex')]);
+                await fs.promises.writeFile(manifest, receipt);
+                await assert.rejects(execFile(process.execPath, [script, 'delete', manifest, createHash('sha256').update(receipt).digest('hex')]));
+                assert.equal((await real.statObject(BUCKET_NAME, 'historical-orphan')).size, 23);
+                console.log('PASS: read-only orphan inventory, reviewed quarantine and deletion recovery window');
+            } finally { await fs.promises.rm(directory, { recursive: true, force: true }); }
+        }
+
     } finally {
         if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+        if (realStorage) {
+            for await (const object of minioClient.listObjectsV2(BUCKET_NAME, '', true)) await real.removeObject(BUCKET_NAME, object.name);
+            await minioClient.removeBucket(BUCKET_NAME);
+        }
         await pool.end();
     }
 };

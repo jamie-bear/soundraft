@@ -1,3 +1,4 @@
+const { logError } = require('../lib/logging');
 const express = require('express');
 const { requireAuthAdmin } = require('../middleware/admin');
 
@@ -6,6 +7,7 @@ module.exports = function(pool) {
     const router = require('../lib/router').createRouter();
     // Apply admin middleware to all routes
     router.use(requireAuthAdmin);
+    router.get('/operations', async (_req, res) => res.set('Cache-Control', 'no-store').json(await require('../lib/operations').operationalStatus(pool)));
 
     /**
      * GET /api/admin/users
@@ -19,48 +21,15 @@ module.exports = function(pool) {
             const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
             const offset = (page - 1) * limit;
 
-            let query = `
-                WITH track_stats AS (
-                    SELECT owner_id, COUNT(*) AS track_count
-                    FROM tracks GROUP BY owner_id
-                ), playlist_stats AS (
-                    SELECT owner_id, COUNT(*) AS playlist_count
-                    FROM playlists GROUP BY owner_id
-                ), storage_stats AS (
-                    SELECT owner_id, SUM(size_bytes) AS total_storage_bytes
-                    FROM storage_objects WHERE state = 'ACTIVE'
-                    GROUP BY owner_id
-                )
-                SELECT 
-                    u.id,
-                    u.email,
-                    u.role,
-                    u.is_active,
-                    u.last_login_at,
-                    u.created_at,
-                    COALESCE(ts.track_count, 0) as track_count,
-                    COALESCE(ps.playlist_count, 0) as playlist_count,
-                    COALESCE(ss.total_storage_bytes, 0) as total_storage_bytes
-                FROM users u
-                LEFT JOIN track_stats ts ON ts.owner_id = u.id
-                LEFT JOIN playlist_stats ps ON ps.owner_id = u.id
-                LEFT JOIN storage_stats ss ON ss.owner_id = u.id
-            `;
-
-            const params = [];
-            
-            if (search) {
-                query += ` WHERE u.email ILIKE $1`;
-                params.push(`%${search}%`);
-            }
-
-            query += `
-                ORDER BY u.created_at DESC
-                LIMIT $${params.length + 1} OFFSET $${params.length + 2}
-            `;
-            params.push(limit, offset);
-
-            const result = await pool.query(query, params);
+            const result = await pool.query(`WITH selected AS MATERIALIZED (
+                SELECT id, email, role, is_active, last_login_at, created_at FROM users
+                WHERE ($1::text IS NULL OR email ILIKE $1)
+                ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3
+            ) SELECT u.*,
+                (SELECT COUNT(*) FROM tracks WHERE owner_id=u.id) AS track_count,
+                (SELECT COUNT(*) FROM playlists WHERE owner_id=u.id) AS playlist_count,
+                (SELECT COALESCE(SUM(size_bytes),0) FROM storage_objects WHERE owner_id=u.id AND state='ACTIVE') AS total_storage_bytes
+                FROM selected u ORDER BY u.created_at DESC, u.id DESC`, [search ? `%${search}%` : null, limit, offset]);
 
             // Get total count
             let countQuery = 'SELECT COUNT(*) FROM users';
@@ -78,7 +47,7 @@ module.exports = function(pool) {
                 limit: parseInt(limit)
             });
         } catch (err) {
-            console.error('Admin list users error:', err);
+            logError('Admin list users error:', err);
             res.status(500).json({ error: 'Failed to list users' });
         }
     });
@@ -94,13 +63,13 @@ module.exports = function(pool) {
             const result = await pool.query(`
                 WITH track_stats AS (
                     SELECT owner_id, COUNT(*) AS track_count
-                    FROM tracks GROUP BY owner_id
+                    FROM tracks WHERE owner_id = $1 GROUP BY owner_id
                 ), playlist_stats AS (
                     SELECT owner_id, COUNT(*) AS playlist_count
-                    FROM playlists GROUP BY owner_id
+                    FROM playlists WHERE owner_id = $1 GROUP BY owner_id
                 ), storage_stats AS (
                     SELECT owner_id, SUM(size_bytes) AS total_storage_bytes
-                    FROM storage_objects WHERE state = 'ACTIVE'
+                    FROM storage_objects WHERE state = 'ACTIVE' AND owner_id = $1
                     GROUP BY owner_id
                 )
                 SELECT 
@@ -126,7 +95,7 @@ module.exports = function(pool) {
 
             res.json({ user: result.rows[0] });
         } catch (err) {
-            console.error('Admin get user error:', err);
+            logError('Admin get user error:', err);
             res.status(500).json({ error: 'Failed to get user' });
         }
     });
@@ -169,7 +138,7 @@ module.exports = function(pool) {
 
             res.json({ user: result.rows[0] });
         } catch (err) {
-            console.error('Admin update user error:', err);
+            logError('Admin update user error:', err);
             res.status(500).json({ error: 'Failed to update user' });
         }
     });
@@ -198,7 +167,7 @@ module.exports = function(pool) {
 
             res.json({ success: true });
         } catch (err) {
-            console.error('Admin delete user error:', err);
+            logError('Admin delete user error:', err);
             res.status(500).json({ error: 'Failed to delete user' });
         }
     });
@@ -239,7 +208,7 @@ module.exports = function(pool) {
                 }
             });
         } catch (err) {
-            console.error('Admin stats error:', err);
+            logError('Admin stats error:', err);
             res.status(500).json({ error: 'Failed to get stats' });
         }
     });
@@ -265,7 +234,7 @@ module.exports = function(pool) {
 
             res.json({ settings });
         } catch (err) {
-            console.error('Admin get settings error:', err);
+            logError('Admin get settings error:', err);
             res.status(500).json({ error: 'Failed to get settings' });
         }
     });
@@ -318,7 +287,7 @@ module.exports = function(pool) {
                 client.release();
             }
         } catch (err) {
-            console.error('Admin update settings error:', err);
+            logError('Admin update settings error:', err);
             res.status(500).json({ error: 'Failed to update settings' });
         }
     });
@@ -344,7 +313,7 @@ module.exports = function(pool) {
 
             res.json({ invitations: result.rows });
         } catch (err) {
-            console.error('Admin list invitations error:', err);
+            logError('Admin list invitations error:', err);
             res.status(500).json({ error: 'Failed to list invitations' });
         }
     });
@@ -383,7 +352,7 @@ module.exports = function(pool) {
 
             res.status(201).json({ invitation: result.rows[0] });
         } catch (err) {
-            console.error('Admin create invitation error:', err);
+            logError('Admin create invitation error:', err);
             res.status(500).json({ error: 'Failed to create invitation' });
         }
     });
@@ -407,7 +376,7 @@ module.exports = function(pool) {
 
             res.json({ success: true });
         } catch (err) {
-            console.error('Admin delete invitation error:', err);
+            logError('Admin delete invitation error:', err);
             res.status(500).json({ error: 'Failed to delete invitation' });
         }
     });

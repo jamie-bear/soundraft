@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { tracksApi, playlistsApi, Track, Playlist, getAssetUrl } from '../lib/api'
 import { usePlayerStore } from '../stores/playerStore'
@@ -16,6 +16,8 @@ export default function Dashboard() {
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
+  const [error, setError] = useState('')
+  const generation = useRef(0)
   const [showCreateTrack, setShowCreateTrack] = useState(false)
   const [showCreatePlaylist, setShowCreatePlaylist] = useState(false)
   const [newTitle, setNewTitle] = useState('')
@@ -29,22 +31,27 @@ export default function Dashboard() {
   const togglePlay = usePlayerStore((state) => state.togglePlay)
 
   useEffect(() => {
-    loadData()
-  }, [])
+    generation.current++
+    const timer = setTimeout(loadData, 200)
+    return () => { clearTimeout(timer); generation.current++ }
+  }, [searchQuery])
 
   const loadData = async () => {
+    const requestGeneration = generation.current
     try {
       setLoading(true)
       const [tracksRes, playlistsRes] = await Promise.all([
-        tracksApi.list(),
-        playlistsApi.list(),
+        tracksApi.list({ limit: 8, search: searchQuery }),
+        playlistsApi.list(undefined, { limit: 8, search: searchQuery }),
       ])
+      if (requestGeneration !== generation.current) return
+      setError('')
       setTracks(tracksRes.tracks)
       setPlaylists(playlistsRes.playlists)
     } catch (err) {
-      console.error('Failed to load data:', err)
+      if (requestGeneration === generation.current) setError(err instanceof Error ? err.message : 'Could not load library')
     } finally {
-      setLoading(false)
+      if (requestGeneration === generation.current) setLoading(false)
     }
   }
 
@@ -118,12 +125,13 @@ export default function Dashboard() {
 
   return (
     <div>
+      {error && <p role="alert">{error} <button onClick={loadData}>Retry</button></p>}
       {/* Header */}
       <div className="mb-6">
         <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-            <p className="text-surface-400">Manage your tracks and playlists</p>
+            <p className="text-surface-400">Recent tracks and playlists — browse Tracks or Playlists for your full library</p>
           </div>
           <div className="flex gap-2">
             <button
@@ -195,7 +203,7 @@ export default function Dashboard() {
                       {/* Menu button */}
                       <div className="absolute top-2 right-2 z-10">
                         <button
-                          onClick={(e) => {
+                          aria-label="Track actions" onClick={(e) => {
                             e.preventDefault()
                             e.stopPropagation()
                             setOpenMenuId(openMenuId === track.id ? null : track.id)
@@ -282,7 +290,7 @@ export default function Dashboard() {
                           {/* Play button overlay */}
                           {track.current_version_id && (
                             <button
-                              onClick={(e) => handlePlay(track, e)}
+                              aria-label={isCurrentlyPlaying ? "Pause track" : "Play track"} onClick={(e) => handlePlay(track, e)}
                               className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity"
                             >
                               <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary-600 text-white">

@@ -36,7 +36,7 @@ export default function Sidebar({ onClose }: SidebarProps) {
         {/* Close button (mobile only) */}
         {onClose && (
           <button
-            onClick={onClose}
+            aria-label="Close navigation" onClick={onClose}
             className="flex h-8 w-8 items-center justify-center rounded-lg text-surface-400 hover:bg-surface-800 hover:text-white sm:hidden"
           >
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -53,6 +53,7 @@ export default function Sidebar({ onClose }: SidebarProps) {
           return (
             <Link
               key={item.path}
+              aria-current={isActive ? 'page' : undefined}
               to={item.path}
               onClick={handleNavClick}
               className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${

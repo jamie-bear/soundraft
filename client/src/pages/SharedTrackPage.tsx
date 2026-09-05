@@ -1,3 +1,4 @@
+import { appendUnique } from '../lib/pages'
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { tracksApi, commentsApi, Track, Comment, getAssetUrl } from '../lib/api'
@@ -22,6 +23,7 @@ export default function SharedTrackPage() {
 
   const [track, setTrack] = useState<Track | null>(null)
   const [comments, setComments] = useState<Comment[]>([])
+  const [commentCursor, setCommentCursor] = useState<string | null>(null)
   const [canPostComments, setCanPostComments] = useState(false)
   const [commentsHidden, setCommentsHidden] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -43,11 +45,12 @@ export default function SharedTrackPage() {
       setTrack(trackData)
 
       // Load comments
-      const { comments: commentsData, canPost, commentsHidden: hidden } = await commentsApi.listTrackComments(
+      const { comments: commentsData, next_cursor: commentsNext, canPost, commentsHidden: hidden } = await commentsApi.listTrackComments(
         trackData.id,
         token
       )
       setComments(commentsData)
+      setCommentCursor(commentsNext)
       setCanPostComments(canPost)
       setCommentsHidden(hidden || false)
     } catch (err) {
@@ -250,6 +253,11 @@ export default function SharedTrackPage() {
                 </p>
               ) : (
                 <CommentSection
+                nextCursor={commentCursor}
+                onLoadMore={async () => {
+                  const page = await commentsApi.listTrackComments(track!.id, token, { cursor: commentCursor })
+                  setComments(previous => appendUnique(previous, page.comments)); setCommentCursor(page.next_cursor)
+                }}
                   entityType="track"
                   entityId={track.id}
                   comments={comments}

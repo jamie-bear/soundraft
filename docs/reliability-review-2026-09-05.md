@@ -1,5 +1,7 @@
 # Remediation review and proposed optimization plan
 
+> Follow-up implementation: see [implementation status, verification and operating instructions](reliability-implementation-2026-09-05.md). The assessment below describes the earlier review snapshot.
+
 Review date: 2026-09-05. Scope: the current working tree, including substantial remediation that was already committed or in progress when this review began. Existing changes were preserved. This is not a deployment certification: no production database, object store, credentials, or remote Git history was changed.
 
 ## Executive assessment

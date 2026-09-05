@@ -1,3 +1,4 @@
+const { logError } = require('./lib/logging');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -14,13 +15,15 @@ const { validateConfig } = require('./lib/config');
 const { storageUrl, streamUrl, verifyGrant } = require('./lib/grants');
 const { setAuthPool } = require('./middleware/auth');
 const { createObjectReconciler } = require('./lib/object-lifecycle');
+const { requestLifecycle, capacity, storageTransport, shutdown, isDraining } = require('./lib/lifecycle');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
 // Trust the first proxy hop (Caddy, nginx, etc.) so req.protocol reflects
 // X-Forwarded-Proto and OG meta URLs use https:// on proxied deployments.
-app.set('trust proxy', 1);
+app.set('trust proxy', process.env.TRUST_PROXY ? process.env.TRUST_PROXY.split(',').map(value => value.trim()) : false);
+app.use(requestLifecycle);
 
 // Security headers via helmet with CSP enabled for SPA
 app.use(helmet({
@@ -53,6 +56,7 @@ app.use(express.json());
 
 // Global rate limiter — 200 requests/minute per IP
 const globalLimiter = rateLimit({
+    skip: req => ['/live', '/ready', '/health'].includes(req.path) || /^\/(stream|storage)\//.test(req.path),
     windowMs: 60 * 1000,
     max: 200,
     standardHeaders: true,
@@ -60,6 +64,10 @@ const globalLimiter = rateLimit({
     message: { error: 'Too many requests. Please slow down.' },
 });
 app.use('/api/', globalLimiter);
+const uploadCapacity = capacity(Number(process.env.MAX_CONCURRENT_UPLOADS || 4), 'Upload');
+const exportCapacity = capacity(Number(process.env.MAX_CONCURRENT_EXPORTS || 2), 'Export');
+app.use('/api', (req, res, next) => req.method === 'POST' && req.is('multipart/form-data') ? uploadCapacity(req, res, next) : next());
+app.use('/api/export/library', exportCapacity);
 
 // File upload configuration — disk storage to avoid OOM on large uploads
 const uploadDir = path.join(os.tmpdir(), 'soundraft-uploads');
@@ -97,8 +105,14 @@ const uploads = {
 };
 
 // Database Connection
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 10_000, idleTimeoutMillis: 30_000 });
-pool.on('error', error => console.error('Idle database connection error:', error.message));
+const pool = new Pool({ connectionString: process.env.DATABASE_URL,
+    max: Number(process.env.DB_POOL_SIZE || 10),
+    connectionTimeoutMillis: Number(process.env.DB_ACQUIRE_TIMEOUT_MS || 5000), idleTimeoutMillis: 30_000,
+    statement_timeout: Number(process.env.DB_STATEMENT_TIMEOUT_MS || 30_000),
+    idle_in_transaction_session_timeout: Number(process.env.DB_TRANSACTION_IDLE_TIMEOUT_MS || 30_000),
+});
+pool.on('connect', client => client.on('error', error => logError('Database connection error', error)));
+pool.on('error', error => logError('Idle database connection error:', error));
 setAuthPool(pool);
 
 // MinIO Client (S3 Compatible) — parse S3_ENDPOINT for flexible configuration
@@ -119,6 +133,8 @@ function parseMinioConfig() {
 const minioConfig = parseMinioConfig();
 const minioClient = new Minio.Client({
     ...minioConfig,
+    transport: storageTransport(minioConfig.useSSL),
+    retryOptions: { disableRetry: true },
     accessKey: process.env.S3_ACCESS_KEY,
     secretKey: process.env.S3_SECRET_KEY
 });
@@ -181,7 +197,7 @@ async function initialize() {
         try {
             await seedExampleContent(adminUserId);
         } catch (err) {
-            console.error('Example content seed error:', err.message);
+            logError('Example content seed error:', err);
         }
     }
 }
@@ -336,6 +352,7 @@ const reactionRoutes = require('./routes/reactions')(pool);
 const exportRoutes = require('./routes/export')(pool, minioClient, BUCKET_NAME);
 
 app.use('/api/auth', authRoutes);
+app.use('/api/media', require('./routes/media')(pool));
 app.use('/api/tracks', trackRoutes);
 app.use('/api/playlists', playlistRoutes);
 app.use('/api/attachments', attachmentRoutes);
@@ -345,17 +362,18 @@ app.use('/api/reactions', reactionRoutes);
 app.use('/api/export', exportRoutes);
 
 // --- Health Check ---
-app.get('/api/health', async (_req, res) => {
+app.get('/api/live', (_req, res) => res.json({ status: 'ok' }));
+app.get(['/api/health', '/api/ready'], async (_req, res) => {
     const checks = { database: false, storage: false };
     try {
         await pool.query('SELECT 1');
         checks.database = true;
         checks.storage = await minioClient.bucketExists(BUCKET_NAME);
     } catch (err) {
-        console.error('Readiness check failed:', err.message);
+        logError('Readiness check failed:', err);
     }
 
-    const ready = checks.database && checks.storage;
+    const ready = !isDraining() && checks.database && checks.storage;
     res.status(ready ? 200 : 503).json({
         status: ready ? 'ok' : 'unavailable',
         checks,
@@ -414,7 +432,7 @@ app.get('/api/storage/*', async (req, res) => {
             headers: { 'Content-Type': contentType, 'Content-Length': stat.size },
         });
     } catch (err) {
-        console.error('Storage fetch error:', err);
+        logError('Storage fetch error:', err);
         streamFailure(res, err, 'Error fetching file');
     }
 });
@@ -477,7 +495,7 @@ app.get('/api/stream/:versionId', optionalAuth, async (req, res) => {
         if (parsed) headers['Content-Range'] = `bytes ${parsed.start}-${parsed.end}/${fileSize}`;
         await sendObject(req, res, minioClient, BUCKET_NAME, file.storage_key, { headers, range: parsed });
     } catch (err) {
-        console.error("Streaming error:", err);
+        logError("Streaming error:", err);
         streamFailure(res, err, 'Error streaming audio');
     }
 });
@@ -567,7 +585,7 @@ ${imageUrl ? `<meta name="twitter:image" content="${imageUrl}">` : ''}
 </head><body></body></html>`;
         return res.send(ogHtml);
     } catch (err) {
-        console.error('OG tag error:', err.message);
+        logError('OG tag error:', err);
         return next();
     }
 }
@@ -596,7 +614,7 @@ app.use((err, _req, res, _next) => {
         return res.status(status).json({ error: err.message, code: err.code });
     }
 
-    console.error('Unhandled request error:', err);
+    logError('Unhandled request error:', err);
     return res.status(500).json({ error: 'Server error' });
 });
 
@@ -606,14 +624,24 @@ async function startServer() {
     await initialize();
     objectReconciler.start();
 
-    return app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
         console.log(`SoundRaft API running on port ${PORT}`);
     });
+    server.requestTimeout = Number(process.env.UPLOAD_TIMEOUT_MS || 900_000);
+    server.headersTimeout = 15_000;
+    let stopping;
+    const stop = () => {
+        if (!stopping) stopping = shutdown(server, pool, objectReconciler).catch(() => { process.exitCode = 1; });
+        return stopping;
+    };
+    process.once('SIGTERM', stop);
+    process.once('SIGINT', stop);
+    return server;
 }
 
 if (require.main === module) {
     startServer().catch(err => {
-        console.error('Fatal startup error:', err);
+        logError('Fatal startup error:', err);
         pool.end().finally(() => {
             process.exitCode = 1;
         });

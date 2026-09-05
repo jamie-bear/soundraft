@@ -1,3 +1,4 @@
+const { logError } = require('./logging');
 'use strict';
 
 const { pipeline } = require('node:stream');
@@ -29,7 +30,7 @@ async function sendObject(req, res, minio, bucket, key, { headers = {}, range, f
     for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
     if (filename) res.setHeader('Content-Disposition', contentDisposition(filename));
     await new Promise(resolve => pipeline(source, res, error => {
-        if (error && error.code !== 'ERR_STREAM_PREMATURE_CLOSE') console.error('Object stream failed:', error.message);
+        if (error && error.code !== 'ERR_STREAM_PREMATURE_CLOSE') logError('Object stream failed:', error);
         resolve();
     }));
 }

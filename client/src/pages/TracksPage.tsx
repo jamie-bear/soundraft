@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react'
+import PageControls from '../components/PageControls'
+import { appendUnique } from '../lib/pages'
+import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { tracksApi, Track, getAssetUrl } from '../lib/api'
 import { usePlayerStore } from '../stores/playerStore'
@@ -15,6 +17,11 @@ export default function TracksPage() {
   const [tracks, setTracks] = useState<Track[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [listError, setListError] = useState('')
+  const [sort, setSort] = useState('newest')
+  const [filter, setFilter] = useState('')
+  const generation = useRef(0)
   const [showCreateTrack, setShowCreateTrack] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [creating, setCreating] = useState(false)
@@ -27,18 +34,25 @@ export default function TracksPage() {
   const togglePlay = usePlayerStore((state) => state.togglePlay)
 
   useEffect(() => {
-    loadTracks()
-  }, [])
+    generation.current++
+    setNextCursor(null)
+    const timer = setTimeout(() => { void loadTracks() }, 200)
+    return () => { clearTimeout(timer); generation.current++ }
+  }, [searchQuery, sort, filter])
 
-  const loadTracks = async () => {
+  const loadTracks = async (cursor?: string | null) => {
+    const requestGeneration = generation.current
     try {
-      setLoading(true)
-      const res = await tracksApi.list()
-      setTracks(res.tracks)
+      if (!cursor) { setLoading(true); setNextCursor(null) }
+      setListError('')
+      const res = await tracksApi.list({ cursor, search: searchQuery, sort, filter })
+      if (requestGeneration !== generation.current) return
+      setTracks(previous => cursor ? appendUnique(previous, res.tracks) : res.tracks)
+      setNextCursor(res.next_cursor)
     } catch (err) {
-      console.error('Failed to load tracks:', err)
+      if (requestGeneration === generation.current) setListError(err instanceof Error ? err.message : 'Could not load tracks')
     } finally {
-      setLoading(false)
+      if (requestGeneration === generation.current) setLoading(false)
     }
   }
 
@@ -75,18 +89,13 @@ export default function TracksPage() {
       setShowCreateTrack(false)
       loadTracks()
     } catch (err) {
-      console.error('Failed to create track:', err)
+      setListError(err instanceof Error ? err.message : 'Could not create track')
     } finally {
       setCreating(false)
     }
   }
 
-  // Filter tracks by search query
-  const filteredTracks = tracks.filter(track =>
-    searchQuery === '' ||
-    track.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (track.artist && track.artist.toLowerCase().includes(searchQuery.toLowerCase()))
-  )
+  const filteredTracks = tracks
 
   return (
     <div>
@@ -113,11 +122,23 @@ export default function TracksPage() {
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
+          aria-label="Search tracks"
           placeholder="Search tracks by title or artist..."
           className="w-full rounded-lg border border-surface-700 bg-surface-800 px-4 py-2 text-white placeholder-surface-500 focus:border-primary-500 focus:outline-none"
         />
       </div>
 
+      <div className="mb-4 flex gap-3">
+        <select aria-label="Sort tracks" value={sort} onChange={e => setSort(e.target.value)} className="rounded bg-surface-800 p-2">
+          <option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="title">Title</option>
+        </select>
+        <select aria-label="Filter tracks" value={filter} onChange={e => setFilter(e.target.value)} className="rounded bg-surface-800 p-2">
+          <option value="">All</option>
+          { ['POC', 'DRAFT', 'WIP', 'FINAL'].map(value => <option key={value}>{value}</option>) }
+        </select>
+      </div>
+      {listError && <p role="alert">{listError} <button onClick={() => loadTracks()}>Retry</button></p>}
+      <PageControls cursor={nextCursor} load={() => loadTracks(nextCursor)} />
       {/* Loading state */}
       {loading ? (
         <div className="flex items-center justify-center py-12">
@@ -150,7 +171,7 @@ export default function TracksPage() {
                 {/* Menu button */}
                 <div className="absolute top-2 right-2 z-10">
                   <button
-                    onClick={(e) => {
+                    aria-label="Track actions" onClick={(e) => {
                       e.preventDefault()
                       e.stopPropagation()
                       setOpenMenuId(openMenuId === track.id ? null : track.id)
@@ -237,7 +258,7 @@ export default function TracksPage() {
                     {/* Play button overlay */}
                     {track.current_version_id && (
                       <button
-                        onClick={(e) => handlePlay(track, e)}
+                        aria-label={isCurrentlyPlaying ? "Pause track" : "Play track"} onClick={(e) => handlePlay(track, e)}
                         className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity"
                       >
                         <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary-600 text-white">

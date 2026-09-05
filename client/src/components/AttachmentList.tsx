@@ -19,6 +19,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { Attachment, attachmentsApi } from '../lib/api'
 
 interface AttachmentListProps {
+  reorderEnabled?: boolean
   trackId: string
   attachments: Attachment[]
   onAttachmentsChange: (attachments: Attachment[]) => void
@@ -167,7 +168,7 @@ function SortableAttachment({ attachment, onRename, onDelete }: SortableAttachme
   )
 }
 
-export default function AttachmentList({ trackId, attachments, onAttachmentsChange }: AttachmentListProps) {
+export default function AttachmentList({ reorderEnabled = true, trackId, attachments, onAttachmentsChange }: AttachmentListProps) {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -180,6 +181,7 @@ export default function AttachmentList({ trackId, attachments, onAttachmentsChan
   )
 
   const handleDragEnd = async (event: DragEndEvent) => {
+    if (!reorderEnabled) { setError('Load the remaining attachments before reordering.'); return }
     const { active, over } = event
     if (!over || active.id === over.id) return
 
@@ -191,11 +193,9 @@ export default function AttachmentList({ trackId, attachments, onAttachmentsChan
       sort_order: i,
     }))
 
-    // Optimistic update
-    onAttachmentsChange(newAttachments)
-
     try {
       await attachmentsApi.reorder(trackId, newAttachments.map((a) => a.id))
+      onAttachmentsChange(newAttachments)
     } catch (err) {
       // Revert on error
       setError(err instanceof Error ? err.message : 'Failed to reorder')
