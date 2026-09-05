@@ -10,14 +10,24 @@ const test = require('node:test');
 const express = require('express');
 const multer = require('multer');
 
-const { generateToken, requireAuth } = require('../middleware/auth');
+const { generateToken, requireAuth, setAuthPool } = require('../middleware/auth');
 const { evaluateResourceAccess } = require('../lib/access');
 const { addResourceUrls, issueGrant, verifyGrant } = require('../lib/grants');
 const { validateConfig, validateResourceGrantTtl } = require('../lib/config');
+const { decodeCursor, encodeCursor, pageResult } = require('../lib/pagination');
+const { StorageQuotaError, stageStorageObject } = require('../lib/object-lifecycle');
 
-const USER = { id: '11111111-1111-4111-8111-111111111111', email: 'user@example.com', role: 'USER' };
-const OWNER = { id: '22222222-2222-4222-8222-222222222222', email: 'owner@example.com', role: 'USER' };
+const USER = { id: '11111111-1111-4111-8111-111111111111', email: 'user@example.com', role: 'USER', auth_version: 1 };
+const OWNER = { id: '22222222-2222-4222-8222-222222222222', email: 'owner@example.com', role: 'USER', auth_version: 1 };
 const LEGACY_UUID_SHARE_TOKEN = '33333333-3333-4333-8333-333333333333';
+
+const defaultAuthPool = {
+    async query(_sql, params) {
+        const user = [USER, OWNER].find((candidate) => candidate.id === params[0]);
+        return { rows: user ? [{ ...user, is_active: true }] : [] };
+    },
+};
+setAuthPool(defaultAuthPool);
 
 function normalized(sql) {
     return sql.replace(/\s+/g, ' ').trim();
@@ -107,6 +117,63 @@ test('resource grants cannot be reused as API session tokens', async () => {
         });
         assert.equal(sessionResponse.status, 200);
     });
+});
+
+test('session authorization uses the current database role and revokes disabled users immediately', async () => {
+    let active = true;
+    setAuthPool({
+        async query() {
+            return { rows: [{ ...USER, role: 'ADMIN', is_active: active }] };
+        },
+    });
+    const router = express.Router();
+    router.get('/current', requireAuth, (req, res) => res.json({ role: req.user.role }));
+    try {
+        await withServer(router, async baseUrl => {
+            const allowed = await fetch(`${baseUrl}/current`, { headers: authHeader() });
+            assert.equal(allowed.status, 200);
+            assert.equal((await allowed.json()).role, 'ADMIN');
+            active = false;
+            const revoked = await fetch(`${baseUrl}/current`, { headers: authHeader() });
+            assert.equal(revoked.status, 401);
+        });
+    } finally {
+        setAuthPool(defaultAuthPool);
+    }
+});
+
+test('pagination cursors round-trip and malformed cursors fail closed', () => {
+    const cursor = encodeCursor({ updated_at: '2026-01-01T00:00:00Z', id: USER.id });
+    assert.deepEqual(decodeCursor(cursor, ['updated_at', 'id']), {
+        updated_at: '2026-01-01T00:00:00Z', id: USER.id,
+    });
+    assert.throws(() => decodeCursor('not-a-cursor', ['id']), /Invalid pagination cursor/);
+    assert.deepEqual(pageResult([{ id: 1 }, { id: 2 }], 1, row => row), {
+        items: [{ id: 1 }], next_cursor: encodeCursor({ id: 1 }),
+    });
+});
+
+test('staged uploads enforce the per-user quota inside a serialized transaction', async () => {
+    const statements = [];
+    const client = {
+        release() {},
+        async query(sql) {
+            const query = normalized(sql);
+            statements.push(query);
+            if (query.startsWith('SELECT COALESCE(SUM(size_bytes)')) return { rows: [{ bytes: 95 }] };
+            return { rows: [] };
+        },
+    };
+    await assert.rejects(
+        stageStorageObject({ connect: async () => client }, {
+            storageKey: 'test/key', bucket: 'tracks', ownerId: USER.id,
+            sizeBytes: 10, mimeType: 'audio/wav', quotaBytes: 100,
+        }),
+        StorageQuotaError
+    );
+    assert.ok(statements.some(statement => statement.startsWith('SELECT pg_advisory_xact_lock')));
+    assert.ok(statements.includes('ROLLBACK'));
+    assert.ok(!statements.some(statement => statement.startsWith('INSERT INTO storage_objects')));
 });
 
 test('configuration rejects the historical development defaults', () => {
@@ -244,15 +311,28 @@ test('attachment upload streams the disk file to object storage and always remov
     let uploadedContent;
     const upload = multer({ storage: multer.diskStorage({ destination: uploadDir }) });
     const pool = {
+        async connect() { return client; },
         async query(sql, params) {
             const query = normalized(sql);
             if (query.startsWith('SELECT owner_id FROM tracks')) {
                 return { rows: [{ owner_id: USER.id }] };
             }
-            if (query.startsWith('INSERT INTO attachments')) {
-                return { rows: [{ id: 'attachment-id', filename: params[1], size_bytes: params[3] }] };
-            }
             throw new Error(`Unexpected query: ${query}`);
+        },
+    };
+    const client = {
+        release() {},
+        async query(sql, params) {
+            const query = normalized(sql);
+            if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(query)) return { rows: [] };
+            if (query.startsWith('SELECT pg_advisory_xact_lock')) return { rows: [] };
+            if (query.startsWith('SELECT COALESCE(SUM(size_bytes)')) return { rows: [{ bytes: 0 }] };
+            if (query.startsWith('INSERT INTO storage_objects')) return { rows: [] };
+            if (query.startsWith('INSERT INTO attachments')) {
+                return { rows: [{ id: 'attachment-id', filename: params[1], size_bytes: params[3], sort_order: 0 }] };
+            }
+            if (query.startsWith('UPDATE storage_objects')) return { rows: [], rowCount: 1 };
+            throw new Error(`Unexpected client query: ${query}`);
         },
     };
     const minio = {

@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const { Pool } = require('pg');
+const { Pool } = require('./lib/postgres');
 const Minio = require('minio');
 const bcrypt = require('bcrypt');
 const multer = require('multer');
@@ -12,6 +12,8 @@ const os = require('os');
 const crypto = require('crypto');
 const { validateConfig } = require('./lib/config');
 const { storageUrl, streamUrl, verifyGrant } = require('./lib/grants');
+const { setAuthPool } = require('./middleware/auth');
+const { createObjectReconciler } = require('./lib/object-lifecycle');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -64,27 +66,40 @@ const uploadDir = path.join(os.tmpdir(), 'soundraft-uploads');
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
 }
-const upload = multer({
-    storage: multer.diskStorage({
-        destination: uploadDir,
-        filename: (_req, file, cb) => {
-            const uniqueSuffix = crypto.randomBytes(8).toString('hex');
-            const safeName = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_');
-            cb(null, `${uniqueSuffix}-${safeName}`);
-        },
-    }),
-    limits: {
-        fileSize: 500 * 1024 * 1024,
-        files: 1,
-        fields: 10,
-        parts: 12,
-        fieldNameSize: 100,
-        fieldSize: 64 * 1024,
+const uploadStorage = multer.diskStorage({
+    destination: uploadDir,
+    filename: (_req, file, cb) => {
+        const uniqueSuffix = crypto.randomBytes(8).toString('hex');
+        const safeName = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_');
+        cb(null, `${uniqueSuffix}-${safeName}`);
     },
 });
+function createUpload(fileSize, fields = 0) {
+    return multer({
+        storage: uploadStorage,
+        limits: {
+            fileSize,
+            files: 1,
+            fields,
+            // Busboy emits partsLimit as soon as the limit is reached, including
+            // the permitted final file. Keep a sentinel slot; files/fields still
+            // enforce the exact accepted multipart shape.
+            parts: fields + 2,
+            fieldNameSize: 100,
+            fieldSize: 64 * 1024,
+        },
+    });
+}
+const uploads = {
+    audio: createUpload(Number(process.env.AUDIO_UPLOAD_MAX_BYTES || 500 * 1024 * 1024)),
+    attachment: createUpload(Number(process.env.ATTACHMENT_UPLOAD_MAX_BYTES || 500 * 1024 * 1024)),
+    cover: createUpload(Number(process.env.COVER_UPLOAD_MAX_BYTES || 20 * 1024 * 1024)),
+};
 
 // Database Connection
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 10_000, idleTimeoutMillis: 30_000 });
+pool.on('error', error => console.error('Idle database connection error:', error.message));
+setAuthPool(pool);
 
 // MinIO Client (S3 Compatible) — parse S3_ENDPOINT for flexible configuration
 function parseMinioConfig() {
@@ -109,6 +124,11 @@ const minioClient = new Minio.Client({
 });
 
 const BUCKET_NAME = process.env.S3_BUCKET || 'tracks';
+const objectReconciler = createObjectReconciler(pool, minioClient, {
+    intervalMs: process.env.OBJECT_RECONCILE_INTERVAL_MS,
+    batchSize: process.env.OBJECT_RECONCILE_BATCH_SIZE,
+    stageTtlMinutes: process.env.OBJECT_STAGE_TTL_MINUTES,
+});
 
 // --- Startup: Ensure bucket exists and seed admin ---
 async function initialize() {
@@ -146,7 +166,7 @@ async function initialize() {
         if (!passwordMatches || admin.role !== 'ADMIN' || !admin.is_active) {
             const hash = passwordMatches ? admin.password_hash : await bcrypt.hash(adminPassword, 12);
             await pool.query(
-                'UPDATE users SET password_hash = $1, role = $2, is_active = true WHERE id = $3',
+                'UPDATE users SET password_hash = $1, role = $2, is_active = true, auth_version = auth_version + 1 WHERE id = $3',
                 [hash, 'ADMIN', admin.id]
             );
             console.log(`Admin user credentials synchronized: ${adminEmail}`);
@@ -227,6 +247,12 @@ async function seedExampleContent(adminUserId) {
         [trackId, 1, trackFile, trackStorageKey, 'audio/wav', trackBuffer.length, durationSeconds]
     );
     const versionId = versionResult.rows[0].id;
+    await pool.query(`
+        INSERT INTO storage_objects
+            (storage_key, bucket, owner_id, resource_type, resource_id, state, size_bytes, mime_type, activated_at)
+        VALUES ($1, $2, $3, 'TRACK_VERSION', $4, 'ACTIVE', $5, 'audio/wav', CURRENT_TIMESTAMP)
+        ON CONFLICT (storage_key) DO NOTHING
+    `, [trackStorageKey, BUCKET_NAME, adminUserId, versionId, trackBuffer.length]);
 
     // Set as current version
     await pool.query(
@@ -249,6 +275,12 @@ async function seedExampleContent(adminUserId) {
             'UPDATE tracks SET cover_art_path = $1 WHERE id = $2',
             [`/api/storage/${coverStorageKey}`, trackId]
         );
+        await pool.query(`
+            INSERT INTO storage_objects
+                (storage_key, bucket, owner_id, resource_type, resource_id, state, size_bytes, mime_type, activated_at)
+            VALUES ($1, $2, $3, 'TRACK_COVER', $4, 'ACTIVE', $5, 'image/jpeg', CURRENT_TIMESTAMP)
+            ON CONFLICT (storage_key) DO NOTHING
+        `, [coverStorageKey, BUCKET_NAME, adminUserId, trackId, coverBuffer.length]);
         console.log(`Uploaded track cover art`);
     }
 
@@ -281,6 +313,12 @@ async function seedExampleContent(adminUserId) {
             'UPDATE playlists SET cover_art_path = $1 WHERE id = $2',
             [`/api/storage/${playlistCoverStorageKey}`, playlistId]
         );
+        await pool.query(`
+            INSERT INTO storage_objects
+                (storage_key, bucket, owner_id, resource_type, resource_id, state, size_bytes, mime_type, activated_at)
+            VALUES ($1, $2, $3, 'PLAYLIST_COVER', $4, 'ACTIVE', $5, 'image/png', CURRENT_TIMESTAMP)
+            ON CONFLICT (storage_key) DO NOTHING
+        `, [playlistCoverStorageKey, BUCKET_NAME, adminUserId, playlistId, playlistCoverBuffer.length]);
         console.log(`Uploaded playlist cover art`);
     }
 
@@ -289,13 +327,13 @@ async function seedExampleContent(adminUserId) {
 
 // --- Routes ---
 const authRoutes = require('./routes/auth')(pool);
-const trackRoutes = require('./routes/tracks')(pool, minioClient, BUCKET_NAME, upload);
-const playlistRoutes = require('./routes/playlists')(pool, minioClient, BUCKET_NAME, upload);
-const attachmentRoutes = require('./routes/attachments')(pool, minioClient, BUCKET_NAME, upload);
+const trackRoutes = require('./routes/tracks')(pool, minioClient, BUCKET_NAME, uploads);
+const playlistRoutes = require('./routes/playlists')(pool, minioClient, BUCKET_NAME, uploads);
+const attachmentRoutes = require('./routes/attachments')(pool, minioClient, BUCKET_NAME, uploads);
 const commentRoutes = require('./routes/comments')(pool);
 const adminRoutes = require('./routes/admin')(pool);
 const reactionRoutes = require('./routes/reactions')(pool);
-const exportRoutes = require('./routes/export')(pool, minioClient, BUCKET_NAME, upload);
+const exportRoutes = require('./routes/export')(pool, minioClient, BUCKET_NAME);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/tracks', trackRoutes);
@@ -326,6 +364,7 @@ app.get('/api/health', async (_req, res) => {
 });
 
 // --- Storage Endpoint (for cover art, etc.) ---
+const { parseRange, sendObject, streamFailure } = require('./lib/streaming');
 // V2: Hardened — removed SVG from MIME map, added nosniff + sandbox headers
 app.get('/api/storage/*', async (req, res) => {
     try {
@@ -366,28 +405,17 @@ app.get('/api/storage/*', async (req, res) => {
             contentType = 'application/octet-stream';
         }
 
-        res.setHeader('Content-Type', contentType);
-        res.setHeader('Content-Length', stat.size);
         // Keep signed resource responses out of shared intermediary caches.
         res.setHeader('Cache-Control', 'private, max-age=300');
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Content-Security-Policy', 'sandbox');
 
-        const dataStream = await minioClient.getObject(BUCKET_NAME, storageKey);
-        dataStream.on('error', (streamErr) => {
-            console.error('Storage stream error:', streamErr);
-            if (!res.headersSent) {
-                return res.status(500).send('Error fetching file');
-            }
-            res.destroy(streamErr);
+        await sendObject(req, res, minioClient, BUCKET_NAME, storageKey, {
+            headers: { 'Content-Type': contentType, 'Content-Length': stat.size },
         });
-        dataStream.pipe(res);
     } catch (err) {
-        if (err.code === 'NoSuchKey') {
-            return res.status(404).send('File not found');
-        }
         console.error('Storage fetch error:', err);
-        res.status(500).send('Error fetching file');
+        streamFailure(res, err, 'Error fetching file');
     }
 });
 
@@ -436,141 +464,27 @@ app.get('/api/stream/:versionId', optionalAuth, async (req, res) => {
         const fileSize = stat.size;
         const range = req.headers.range;
 
-        // 3. Handle Range Request (Seeking)
-        if (range) {
-            const rangeMatch = range.match(/^bytes=(\d*)-(\d*)$/);
-            if (!rangeMatch) {
-                return res.status(416).send('Invalid range');
-            }
-
-            const start = rangeMatch[1] === '' ? null : parseInt(rangeMatch[1], 10);
-            const end = rangeMatch[2] === '' ? null : parseInt(rangeMatch[2], 10);
-
-            if (
-                (start !== null && Number.isNaN(start)) ||
-                (end !== null && Number.isNaN(end))
-            ) {
-                return res.status(416).send('Invalid range');
-            }
-
-            let normalizedStart;
-            let normalizedEnd;
-
-            // Handle suffix byte ranges (e.g. bytes=-500)
-            if (start === null && end !== null) {
-                if (end <= 0) {
-                    return res.status(416).send('Invalid range');
-                }
-                normalizedStart = Math.max(fileSize - end, 0);
-                normalizedEnd = fileSize - 1;
-            } else {
-                normalizedStart = start ?? 0;
-                normalizedEnd = end ?? (fileSize - 1);
-            }
-
-            if (
-                normalizedStart < 0 ||
-                normalizedEnd < normalizedStart ||
-                normalizedStart >= fileSize
-            ) {
-                res.set('Content-Range', `bytes */${fileSize}`);
-                return res.status(416).send('Requested range not satisfiable');
-            }
-
-            normalizedEnd = Math.min(normalizedEnd, fileSize - 1);
-            const chunksize = (normalizedEnd - normalizedStart) + 1;
-
-            const headers = {
-                'Content-Range': `bytes ${normalizedStart}-${normalizedEnd}/${fileSize}`,
-                'Accept-Ranges': 'bytes',
-                'Content-Length': chunksize,
-                'Content-Type': file.mime_type,
-            };
-
-            res.writeHead(206, headers);
-
-            const dataStream = await minioClient.getPartialObject(
-                BUCKET_NAME,
-                file.storage_key,
-                normalizedStart,
-                chunksize
-            );
-            dataStream.on('error', (streamErr) => {
-                console.error("Partial stream error:", streamErr);
-                if (!res.headersSent) {
-                    return res.status(500).send('Error streaming audio');
-                }
-                res.destroy(streamErr);
-            });
-            dataStream.pipe(res);
-
-        } else {
-            // 4. Handle Full Download
-            const headers = {
-                'Content-Length': fileSize,
-                'Content-Type': file.mime_type,
-            };
-            res.writeHead(200, headers);
-            const dataStream = await minioClient.getObject(BUCKET_NAME, file.storage_key);
-            dataStream.on('error', (streamErr) => {
-                console.error("Full stream error:", streamErr);
-                if (!res.headersSent) {
-                    return res.status(500).send('Error streaming audio');
-                }
-                res.destroy(streamErr);
-            });
-            dataStream.pipe(res);
+        const parsed = range ? parseRange(range, fileSize) : undefined;
+        if (range && !parsed) {
+            return res.status(416).set('Content-Range', `bytes */${fileSize}`).send('Requested range not satisfiable');
         }
-
+        const headers = {
+            'Accept-Ranges': 'bytes',
+            'Content-Length': parsed ? parsed.length : fileSize,
+            'Content-Type': file.mime_type,
+            'Cache-Control': 'private, no-store',
+        };
+        if (parsed) headers['Content-Range'] = `bytes ${parsed.start}-${parsed.end}/${fileSize}`;
+        await sendObject(req, res, minioClient, BUCKET_NAME, file.storage_key, { headers, range: parsed });
     } catch (err) {
         console.error("Streaming error:", err);
-        res.status(500).send('Error streaming audio');
+        streamFailure(res, err, 'Error streaming audio');
     }
 });
 
 // --- Database Migration Runner ---
 async function runMigrations() {
-    // Create migrations tracking table if not exists
-    await pool.query(`
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                id SERIAL PRIMARY KEY,
-                filename VARCHAR(255) UNIQUE NOT NULL,
-                applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            )
-    `);
-
-    const migrationsDir = path.join(__dirname, 'db', 'migrations');
-    if (!fs.existsSync(migrationsDir)) return;
-
-    const files = fs.readdirSync(migrationsDir)
-        .filter(f => f.endsWith('.sql'))
-        .sort();
-
-    for (const file of files) {
-        const { rows } = await pool.query(
-            'SELECT 1 FROM schema_migrations WHERE filename = $1',
-            [file]
-        );
-        if (rows.length === 0) {
-            const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
-            const client = await pool.connect();
-            try {
-                await client.query('BEGIN');
-                await client.query(sql);
-                await client.query(
-                    'INSERT INTO schema_migrations (filename) VALUES ($1)',
-                    [file]
-                );
-                await client.query('COMMIT');
-                console.log(`Migration applied: ${file}`);
-            } catch (migrationErr) {
-                await client.query('ROLLBACK');
-                throw migrationErr;
-            } finally {
-                client.release();
-            }
-        }
-    }
+    await require('./lib/migrations').migrate(pool, path.join(__dirname, 'db', 'migrations'), BUCKET_NAME);
 }
 
 // --- Open Graph Meta Tags for Share Links ---
@@ -676,6 +590,7 @@ if (fs.existsSync(frontendPath)) {
 // Central error mapping for middleware errors that occur before route handlers,
 // especially multipart size/shape errors from Multer.
 app.use((err, _req, res, _next) => {
+    if (res.headersSent) return res.destroy(err);
     if (err instanceof multer.MulterError) {
         const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
         return res.status(status).json({ error: err.message, code: err.code });
@@ -689,6 +604,7 @@ async function startServer() {
     validateConfig();
     await runMigrations();
     await initialize();
+    objectReconciler.start();
 
     return app.listen(PORT, () => {
         console.log(`SoundRaft API running on port ${PORT}`);

@@ -7,19 +7,19 @@ export default function UserSettings() {
   const [exporting, setExporting] = useState(false)
   const [exportMode, setExportMode] = useState<'tracks' | 'playlists'>('tracks')
 
-  const handleExport = () => {
+  const handleExport = async () => {
     setExporting(true)
-    const url = exportApi.getLibraryExportUrl(exportMode)
-
-    const a = document.createElement('a')
-    a.href = url
-    a.download = ''
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-
-    // Reset state after a delay (browser handles download in background)
-    setTimeout(() => setExporting(false), 3000)
+    try {
+      const url = await exportApi.getLibraryExportUrl(exportMode)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = ''
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+    } finally {
+      setExporting(false)
+    }
   }
 
   return (

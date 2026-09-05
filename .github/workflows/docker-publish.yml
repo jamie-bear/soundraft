@@ -29,6 +29,20 @@ jobs:
 
   quality:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: soundraft
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: soundraft_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U soundraft -d soundraft_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -47,6 +61,21 @@ jobs:
         run: |
           npm test
           npm audit --audit-level=high
+
+      - name: PostgreSQL migration and API integration tests
+        working-directory: ./server
+        env:
+          TEST_DATABASE_URL: postgresql://soundraft:test-password@localhost:5432/soundraft_test
+          JWT_SECRET: ci-only-jwt-secret-with-at-least-thirty-two-characters
+          S3_ACCESS_KEY: ci-access-key
+          S3_SECRET_KEY: ci-secret-key-with-at-least-sixteen-characters
+          ADMIN_EMAIL: admin@example.com
+          ADMIN_PASSWORD: ci-admin-password-with-at-least-twelve-characters
+        run: |
+          npm run test:integration
+
+      - name: Recovery preflight safety tests
+        run: python3 scripts/test_restore_validation.py
 
       - name: Install client dependencies
         working-directory: ./client

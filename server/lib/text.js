@@ -6,7 +6,7 @@
  * protects non-React consumers such as Open Graph and export renderers.
  */
 function sanitizeText(input) {
-    if (typeof input !== 'string') return input;
+    if (typeof input !== 'string') return '';
     return input.replace(/<[^>]*>/g, '').trim();
 }
 

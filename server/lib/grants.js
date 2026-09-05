@@ -13,7 +13,7 @@ function secret() {
     return process.env.JWT_SECRET;
 }
 
-function issueGrant(claims) {
+function issueGrant(claims, expiresIn = GRANT_TTL) {
     return jwt.sign(
         { ...claims, token_type: 'RESOURCE_GRANT' },
         secret(),
@@ -21,12 +21,12 @@ function issueGrant(claims) {
             algorithm: 'HS256',
             audience: GRANT_AUDIENCE,
             issuer: GRANT_ISSUER,
-            expiresIn: GRANT_TTL,
+            expiresIn,
         }
     );
 }
 
-function verifyGrant(token, expectedClaims) {
+function readGrant(token, expectedClaims = {}) {
     if (!token) return false;
 
     try {
@@ -37,10 +37,16 @@ function verifyGrant(token, expectedClaims) {
         });
 
         if (decoded.token_type !== 'RESOURCE_GRANT') return false;
-        return Object.entries(expectedClaims).every(([key, value]) => decoded[key] === value);
+        return Object.entries(expectedClaims).every(([key, value]) => decoded[key] === value)
+            ? decoded
+            : false;
     } catch {
         return false;
     }
+}
+
+function verifyGrant(token, expectedClaims) {
+    return Boolean(readGrant(token, expectedClaims));
 }
 
 function streamUrl(versionId) {
@@ -71,6 +77,7 @@ function addResourceUrls(resource) {
 module.exports = {
     addResourceUrls,
     issueGrant,
+    readGrant,
     storageUrl,
     streamUrl,
     verifyGrant,

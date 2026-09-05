@@ -51,6 +51,13 @@ function validateConfig(env = process.env) {
     assertStrong('S3_ACCESS_KEY', env.S3_ACCESS_KEY, 12);
     assertStrong('S3_SECRET_KEY', env.S3_SECRET_KEY, 16);
     validateResourceGrantTtl(env.RESOURCE_GRANT_TTL);
+    for (const key of ['AUDIO_UPLOAD_MAX_BYTES', 'ATTACHMENT_UPLOAD_MAX_BYTES', 'COVER_UPLOAD_MAX_BYTES',
+        'USER_STORAGE_QUOTA_BYTES', 'OBJECT_RECONCILE_INTERVAL_MS', 'OBJECT_RECONCILE_BATCH_SIZE',
+        'OBJECT_STAGE_TTL_MINUTES', 'EXPORT_QUERY_TIMEOUT_MS', 'EXPORT_TIMEOUT_MS']) {
+        if (env[key] !== undefined && (!Number.isSafeInteger(Number(env[key])) || Number(env[key]) <= 0)) {
+            throw new Error(`${key} must be a positive integer`);
+        }
+    }
 
     return true;
 }

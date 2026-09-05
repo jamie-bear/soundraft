@@ -183,6 +183,7 @@ export default function CoverArtUpload({
       </div>
 
       {/* Error message */}
+      <p className="text-xs text-surface-400">Square image, up to 20MB. Saved as WebP up to 2048px; animation is flattened.</p>
       {error && (
         <p className="text-xs text-red-400 text-center">{error}</p>
       )}

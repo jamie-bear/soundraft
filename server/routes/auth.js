@@ -3,7 +3,6 @@ const bcrypt = require('bcrypt');
 const rateLimit = require('express-rate-limit');
 const { generateToken, requireAuth } = require('../middleware/auth');
 
-const router = express.Router();
 
 // V6: Rate limiting for auth endpoints — prevent brute-force attacks
 const authLimiter = rateLimit({
@@ -15,6 +14,7 @@ const authLimiter = rateLimit({
 });
 
 module.exports = function(pool) {
+    const router = require('../lib/router').createRouter();
     /**
      * POST /api/auth/register
      * Create a new user account
@@ -55,7 +55,7 @@ module.exports = function(pool) {
             const passwordHash = await bcrypt.hash(password, 10);
 
             const result = await pool.query(
-                'INSERT INTO users (email, password_hash, last_login_at) VALUES ($1, $2, CURRENT_TIMESTAMP) RETURNING id, email, role, created_at',
+                'INSERT INTO users (email, password_hash, last_login_at) VALUES ($1, $2, CURRENT_TIMESTAMP) RETURNING id, email, role, auth_version, created_at',
                 [email.toLowerCase(), passwordHash]
             );
 
@@ -91,7 +91,7 @@ module.exports = function(pool) {
 
             // Find user
             const result = await pool.query(
-                'SELECT id, email, password_hash, role, is_active FROM users WHERE email = $1',
+                'SELECT id, email, password_hash, role, is_active, auth_version FROM users WHERE email = $1',
                 [email.toLowerCase()]
             );
 

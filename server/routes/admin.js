@@ -1,9 +1,9 @@
 const express = require('express');
 const { requireAuthAdmin } = require('../middleware/admin');
 
-const router = express.Router();
 
 module.exports = function(pool) {
+    const router = require('../lib/router').createRouter();
     // Apply admin middleware to all routes
     router.use(requireAuthAdmin);
 
@@ -20,6 +20,17 @@ module.exports = function(pool) {
             const offset = (page - 1) * limit;
 
             let query = `
+                WITH track_stats AS (
+                    SELECT owner_id, COUNT(*) AS track_count
+                    FROM tracks GROUP BY owner_id
+                ), playlist_stats AS (
+                    SELECT owner_id, COUNT(*) AS playlist_count
+                    FROM playlists GROUP BY owner_id
+                ), storage_stats AS (
+                    SELECT owner_id, SUM(size_bytes) AS total_storage_bytes
+                    FROM storage_objects WHERE state = 'ACTIVE'
+                    GROUP BY owner_id
+                )
                 SELECT 
                     u.id,
                     u.email,
@@ -27,14 +38,13 @@ module.exports = function(pool) {
                     u.is_active,
                     u.last_login_at,
                     u.created_at,
-                    COUNT(DISTINCT t.id) as track_count,
-                    COUNT(DISTINCT p.id) as playlist_count,
-                    COALESCE(SUM(tv.size_bytes), 0) + COALESCE(SUM(a.size_bytes), 0) as total_storage_bytes
+                    COALESCE(ts.track_count, 0) as track_count,
+                    COALESCE(ps.playlist_count, 0) as playlist_count,
+                    COALESCE(ss.total_storage_bytes, 0) as total_storage_bytes
                 FROM users u
-                LEFT JOIN tracks t ON t.owner_id = u.id
-                LEFT JOIN playlists p ON p.owner_id = u.id
-                LEFT JOIN track_versions tv ON tv.track_id = t.id
-                LEFT JOIN attachments a ON a.track_id = t.id
+                LEFT JOIN track_stats ts ON ts.owner_id = u.id
+                LEFT JOIN playlist_stats ps ON ps.owner_id = u.id
+                LEFT JOIN storage_stats ss ON ss.owner_id = u.id
             `;
 
             const params = [];
@@ -45,7 +55,6 @@ module.exports = function(pool) {
             }
 
             query += `
-                GROUP BY u.id
                 ORDER BY u.created_at DESC
                 LIMIT $${params.length + 1} OFFSET $${params.length + 2}
             `;
@@ -83,6 +92,17 @@ module.exports = function(pool) {
             const { id } = req.params;
 
             const result = await pool.query(`
+                WITH track_stats AS (
+                    SELECT owner_id, COUNT(*) AS track_count
+                    FROM tracks GROUP BY owner_id
+                ), playlist_stats AS (
+                    SELECT owner_id, COUNT(*) AS playlist_count
+                    FROM playlists GROUP BY owner_id
+                ), storage_stats AS (
+                    SELECT owner_id, SUM(size_bytes) AS total_storage_bytes
+                    FROM storage_objects WHERE state = 'ACTIVE'
+                    GROUP BY owner_id
+                )
                 SELECT 
                     u.id,
                     u.email,
@@ -90,16 +110,14 @@ module.exports = function(pool) {
                     u.is_active,
                     u.last_login_at,
                     u.created_at,
-                    COUNT(DISTINCT t.id) as track_count,
-                    COUNT(DISTINCT p.id) as playlist_count,
-                    COALESCE(SUM(tv.size_bytes), 0) + COALESCE(SUM(a.size_bytes), 0) as total_storage_bytes
+                    COALESCE(ts.track_count, 0) as track_count,
+                    COALESCE(ps.playlist_count, 0) as playlist_count,
+                    COALESCE(ss.total_storage_bytes, 0) as total_storage_bytes
                 FROM users u
-                LEFT JOIN tracks t ON t.owner_id = u.id
-                LEFT JOIN playlists p ON p.owner_id = u.id
-                LEFT JOIN track_versions tv ON tv.track_id = t.id
-                LEFT JOIN attachments a ON a.track_id = t.id
+                LEFT JOIN track_stats ts ON ts.owner_id = u.id
+                LEFT JOIN playlist_stats ps ON ps.owner_id = u.id
+                LEFT JOIN storage_stats ss ON ss.owner_id = u.id
                 WHERE u.id = $1
-                GROUP BY u.id
             `, [id]);
 
             if (result.rows.length === 0) {
@@ -136,7 +154,11 @@ module.exports = function(pool) {
                 UPDATE users
                 SET 
                     role = COALESCE($1, role),
-                    is_active = COALESCE($2, is_active)
+                    is_active = COALESCE($2, is_active),
+                    auth_version = auth_version + CASE
+                        WHEN ($1 IS NOT NULL AND $1 IS DISTINCT FROM role)
+                          OR ($2 IS NOT NULL AND $2 IS DISTINCT FROM is_active)
+                        THEN 1 ELSE 0 END
                 WHERE id = $3
                 RETURNING id, email, role, is_active, created_at
             `, [role, is_active, id]);

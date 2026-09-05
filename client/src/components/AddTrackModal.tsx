@@ -69,10 +69,7 @@ export default function AddTrackModal({
     setError('')
 
     try {
-      // Add tracks one by one
-      for (const trackId of selectedTrackIds) {
-        await playlistsApi.addTrack(playlistId, trackId)
-      }
+      await playlistsApi.addTracks(playlistId, Array.from(selectedTrackIds))
       onTracksAdded()
       onClose()
     } catch (err) {

@@ -3,8 +3,8 @@ const rateLimit = require('express-rate-limit');
 const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { sanitizeText } = require('../lib/text');
 const { evaluateEntityAccess } = require('../lib/access');
+const { decodeCursor, pageLimit, pageResult } = require('../lib/pagination');
 
-const router = express.Router();
 
 const commentLimiter = rateLimit({
     windowMs: 60 * 1000,
@@ -15,6 +15,7 @@ const commentLimiter = rateLimit({
 });
 
 module.exports = function(pool) {
+    const router = require('../lib/router').createRouter();
     
     /**
      * Helper function to check comment access
@@ -85,6 +86,8 @@ module.exports = function(pool) {
         try {
             const { trackId } = req.params;
             const { token } = req.query;
+            const limit = pageLimit(req.query.limit);
+            const cursor = decodeCursor(req.query.cursor, ['created_at', 'id']);
 
             const access = await checkCommentAccess('track', trackId, req.user?.id, token);
 
@@ -103,19 +106,21 @@ module.exports = function(pool) {
                 FROM comments c
                 LEFT JOIN users u ON c.user_id = u.id
                 WHERE c.track_id = $1
-                ORDER BY c.audio_timestamp ASC NULLS LAST, c.created_at ASC
-            `, [trackId]);
+                  AND ($2::timestamptz IS NULL OR (c.created_at, c.id) > ($2::timestamptz, $3::uuid))
+                ORDER BY c.created_at ASC, c.id ASC LIMIT $4
+            `, [trackId, cursor?.created_at || null, cursor?.id || null, limit + 1]);
 
             // Mask emails for non-owners
-            const comments = result.rows.map(comment => ({
+            const page = pageResult(result.rows, limit, row => ({ created_at: row.created_at, id: row.id }));
+            const comments = page.items.map(comment => ({
                 ...comment,
                 user_email: access.isOwner ? comment.user_email : (comment.user_email ? 'User' : 'Anonymous')
             }));
 
-            res.json({ comments, canPost: access.canPost, commentsHidden: false });
+            res.json({ comments, canPost: access.canPost, commentsHidden: false, next_cursor: page.next_cursor });
         } catch (err) {
             console.error('List track comments error:', err);
-            res.status(500).json({ error: 'Failed to list comments' });
+            res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to list comments' });
         }
     });
 
@@ -181,6 +186,8 @@ module.exports = function(pool) {
         try {
             const { playlistId } = req.params;
             const { token } = req.query;
+            const limit = pageLimit(req.query.limit);
+            const cursor = decodeCursor(req.query.cursor, ['created_at', 'id']);
 
             const access = await checkCommentAccess('playlist', playlistId, req.user?.id, token);
 
@@ -199,19 +206,21 @@ module.exports = function(pool) {
                 FROM comments c
                 LEFT JOIN users u ON c.user_id = u.id
                 WHERE c.playlist_id = $1
-                ORDER BY c.created_at ASC
-            `, [playlistId]);
+                  AND ($2::timestamptz IS NULL OR (c.created_at, c.id) > ($2::timestamptz, $3::uuid))
+                ORDER BY c.created_at ASC, c.id ASC LIMIT $4
+            `, [playlistId, cursor?.created_at || null, cursor?.id || null, limit + 1]);
 
             // Mask emails for non-owners
-            const comments = result.rows.map(comment => ({
+            const page = pageResult(result.rows, limit, row => ({ created_at: row.created_at, id: row.id }));
+            const comments = page.items.map(comment => ({
                 ...comment,
                 user_email: access.isOwner ? comment.user_email : (comment.user_email ? 'User' : 'Anonymous')
             }));
 
-            res.json({ comments, canPost: access.canPost, commentsHidden: false });
+            res.json({ comments, canPost: access.canPost, commentsHidden: false, next_cursor: page.next_cursor });
         } catch (err) {
             console.error('List playlist comments error:', err);
-            res.status(500).json({ error: 'Failed to list comments' });
+            res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to list comments' });
         }
     });
 

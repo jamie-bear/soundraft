@@ -1,12 +1,13 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { authApi, User } from '../lib/api'
+import { authApi, ApiError, User } from '../lib/api'
 
 interface AuthState {
   user: User | null
   token: string | null
   isLoading: boolean
   isAuthenticated: boolean
+  authError: string | null
   
   // Actions
   login: (email: string, password: string) => Promise<void>
@@ -23,6 +24,7 @@ export const useAuthStore = create<AuthState>()(
       token: null,
       isLoading: true,
       isAuthenticated: false,
+      authError: null,
 
       login: async (email: string, password: string) => {
         const { user, token } = await authApi.login(email, password)
@@ -42,6 +44,7 @@ export const useAuthStore = create<AuthState>()(
       },
 
       checkAuth: async () => {
+        set({ isLoading: true, authError: null })
         const token = localStorage.getItem('token')
         
         if (!token) {
@@ -53,9 +56,13 @@ export const useAuthStore = create<AuthState>()(
           const { user } = await authApi.me()
           set({ user, token, isAuthenticated: true, isLoading: false })
         } catch (error) {
-          // Token invalid or expired
-          localStorage.removeItem('token')
-          set({ user: null, token: null, isAuthenticated: false, isLoading: false })
+          if (error instanceof ApiError && error.status === 401) {
+            localStorage.removeItem('token')
+            set({ user: null, token: null, isAuthenticated: false, isLoading: false })
+          } else {
+            // Keep the session during an outage; do not silently log users out.
+            set({ isLoading: false, authError: 'Unable to check your session. Please try again.' })
+          }
         }
       },
 

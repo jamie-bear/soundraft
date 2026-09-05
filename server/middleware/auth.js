@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = process.env.JWT_SECRET;
+let authPool;
 
 // V4: Validate JWT secret at startup — refuse to run with missing or known-weak defaults
 const KNOWN_DEV_SECRETS = [
@@ -33,16 +34,33 @@ const JWT_VERIFY_OPTIONS = {
 function verifySession(token) {
     const decoded = jwt.verify(token, JWT_SECRET, JWT_VERIFY_OPTIONS);
     if (decoded.token_type !== 'SESSION' || !decoded.id) {
-        throw new Error('Invalid session token');
+        throw Object.assign(new Error('Invalid session token'), { statusCode: 401 });
     }
     return decoded;
+}
+
+function setAuthPool(pool) {
+    authPool = pool;
+}
+
+async function loadCurrentUser(decoded) {
+    if (!authPool) throw new Error('Authentication database is not configured');
+    const result = await authPool.query(
+        'SELECT id, email, role, is_active, auth_version FROM users WHERE id = $1',
+        [decoded.id]
+    );
+    const user = result.rows[0];
+    if (!user || !user.is_active || Number(user.auth_version) !== Number(decoded.auth_version)) {
+        throw Object.assign(new Error('Session revoked'), { statusCode: 401 });
+    }
+    return { id: user.id, email: user.email, role: user.role, auth_version: user.auth_version };
 }
 
 /**
  * Middleware: Require valid JWT token
  * Sets req.user with decoded token payload
  */
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -53,44 +71,11 @@ function requireAuth(req, res, next) {
 
     try {
         const decoded = verifySession(token);
-        req.user = decoded;
+        req.user = await loadCurrentUser(decoded);
         next();
     } catch (err) {
-        return res.status(401).json({ error: 'Invalid token' });
-    }
-}
-
-/**
- * Middleware: Require valid JWT token (accepts both header and query param)
- * Use for download endpoints that need direct browser access
- * NOTE: Tokens in query params are logged in URLs/browser history/referer headers.
- * Consider migrating to signed URLs for improved security.
- * Sets req.user with decoded token payload
- */
-function requireAuthWithQuery(req, res, next) {
-    let token = null;
-
-    // First try Authorization header
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        token = authHeader.split(' ')[1];
-    }
-
-    // If no header, try query param 'auth'
-    if (!token && req.query.auth) {
-        token = req.query.auth;
-    }
-
-    if (!token) {
-        return res.status(401).json({ error: 'No token provided' });
-    }
-
-    try {
-        const decoded = verifySession(token);
-        req.user = decoded;
-        next();
-    } catch (err) {
-        return res.status(401).json({ error: 'Invalid token' });
+        const invalid = err.statusCode === 401 || err instanceof jwt.JsonWebTokenError;
+        return res.status(invalid ? 401 : 503).json({ error: invalid ? 'Invalid token' : 'Authentication temporarily unavailable' });
     }
 }
 
@@ -98,7 +83,7 @@ function requireAuthWithQuery(req, res, next) {
  * Middleware: Optional authentication
  * Sets req.user if valid token exists, otherwise continues
  */
-function optionalAuth(req, res, next) {
+async function optionalAuth(req, res, next) {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -110,8 +95,11 @@ function optionalAuth(req, res, next) {
 
     try {
         const decoded = verifySession(token);
-        req.user = decoded;
+        req.user = await loadCurrentUser(decoded);
     } catch (err) {
+        if (err.statusCode !== 401 && !(err instanceof jwt.JsonWebTokenError)) {
+            return res.status(503).json({ error: 'Authentication temporarily unavailable' });
+        }
         req.user = null;
     }
 
@@ -208,7 +196,13 @@ function requireOwnerForWrite(req, res, next) {
  */
 function generateToken(user) {
     return jwt.sign(
-        { id: user.id, email: user.email, role: user.role, token_type: 'SESSION' },
+        {
+            id: user.id,
+            email: user.email,
+            role: user.role,
+            auth_version: Number(user.auth_version),
+            token_type: 'SESSION'
+        },
         JWT_SECRET,
         {
             algorithm: 'HS256',
@@ -221,11 +215,11 @@ function generateToken(user) {
 
 module.exports = {
     requireAuth,
-    requireAuthWithQuery,
     optionalAuth,
     checkOwnership,
     checkShareAccess,
     requireOwnerForWrite,
     generateToken,
+    setAuthPool,
     JWT_SECRET
 };

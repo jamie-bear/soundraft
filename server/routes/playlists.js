@@ -4,10 +4,14 @@ const fs = require('fs');
 const rateLimit = require('express-rate-limit');
 const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { sanitizeText } = require('../lib/text');
+const { validateMetadata } = require('../lib/metadata');
+const { prepareCover } = require('../lib/media');
 const { evaluateResourceAccess, isUuid } = require('../lib/access');
 const { addResourceUrls } = require('../lib/grants');
+const { uploadDeadline } = require('../lib/uploads');
+const { decodeCursor, pageLimit, pageResult } = require('../lib/pagination');
+const { abandonStorageObject, activateStorageObject, stageStorageObject } = require('../lib/object-lifecycle');
 
-const router = express.Router();
 
 const uploadLimiter = rateLimit({
     windowMs: 60 * 1000,
@@ -17,7 +21,9 @@ const uploadLimiter = rateLimit({
     message: { error: 'Too many uploads. Please wait a moment.' },
 });
 
-module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
+module.exports = function(pool, minioClient, BUCKET_NAME, uploads) {
+    const router = require('../lib/router').createRouter();
+        const coverUpload = uploads.cover || uploads;
     
     /**
      * GET /api/playlists
@@ -27,40 +33,26 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
     router.get('/', requireAuth, async (req, res) => {
         try {
             const { forTrack } = req.query;
-            
-            let query;
-            let params = [req.user.id];
-            
-            if (forTrack) {
-                // Include a flag for whether each playlist contains this track
-                query = `
-                    SELECT p.*, 
-                           COUNT(pt.track_id) as track_count,
-                           EXISTS(SELECT 1 FROM playlist_tracks pt2 WHERE pt2.playlist_id = p.id AND pt2.track_id = $2) as contains_track
-                    FROM playlists p
-                    LEFT JOIN playlist_tracks pt ON p.id = pt.playlist_id
-                    WHERE p.owner_id = $1
-                    GROUP BY p.id
-                    ORDER BY p.created_at DESC
-                `;
-                params.push(forTrack);
-            } else {
-                query = `
-                    SELECT p.*, 
-                           COUNT(pt.track_id) as track_count
-                    FROM playlists p
-                    LEFT JOIN playlist_tracks pt ON p.id = pt.playlist_id
-                    WHERE p.owner_id = $1
-                    GROUP BY p.id
-                    ORDER BY p.created_at DESC
-                `;
-            }
-            
-            const result = await pool.query(query, params);
-            res.json({ playlists: result.rows.map(addResourceUrls) });
+            const limit = pageLimit(req.query.limit);
+            const cursor = decodeCursor(req.query.cursor, ['created_at', 'id']);
+            const result = await pool.query(`
+                SELECT p.*,
+                       (SELECT COUNT(*) FROM playlist_tracks pt WHERE pt.playlist_id = p.id) AS track_count,
+                       CASE WHEN $2::uuid IS NULL THEN false ELSE EXISTS(
+                           SELECT 1 FROM playlist_tracks pt2
+                           WHERE pt2.playlist_id = p.id AND pt2.track_id = $2
+                       ) END AS contains_track
+                FROM playlists p
+                WHERE p.owner_id = $1
+                  AND ($3::timestamptz IS NULL OR (p.created_at, p.id) < ($3::timestamptz, $4::uuid))
+                ORDER BY p.created_at DESC, p.id DESC
+                LIMIT $5
+            `, [req.user.id, forTrack || null, cursor?.created_at || null, cursor?.id || null, limit + 1]);
+            const page = pageResult(result.rows, limit, (row) => ({ created_at: row.created_at, id: row.id }));
+            res.json({ playlists: page.items.map(addResourceUrls), next_cursor: page.next_cursor });
         } catch (err) {
             console.error('List playlists error:', err);
-            res.status(500).json({ error: 'Failed to list playlists' });
+            res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to list playlists' });
         }
     });
 
@@ -71,6 +63,8 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
     router.post('/', requireAuth, async (req, res) => {
         try {
             const { title, artist, type = 'PLAYLIST' } = req.body;
+            const invalid = validateMetadata(req.body, 'playlist', true);
+            if (invalid) return res.status(400).json({ error: invalid });
 
             const sanitizedTitle = sanitizeText(title);
             if (!sanitizedTitle) {
@@ -170,6 +164,8 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
         try {
             const { id } = req.params;
             const { title, artist, type, is_public, comment_access } = req.body;
+            const invalid = validateMetadata(req.body, 'playlist');
+            if (invalid) return res.status(400).json({ error: invalid });
 
             // Verify ownership
             const existing = await pool.query(
@@ -188,13 +184,13 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             const result = await pool.query(`
                 UPDATE playlists
                 SET title = COALESCE($1, title),
-                    artist = COALESCE($2, artist),
+                    artist = CASE WHEN $7 THEN $2 ELSE artist END,
                     type = COALESCE($3, type),
                     is_public = COALESCE($4, is_public),
                     comment_access = COALESCE($5, comment_access)
                 WHERE id = $6
                 RETURNING *
-            `, [title ? sanitizeText(title) : null, artist ? sanitizeText(artist) : null, type, is_public, comment_access, id]);
+            `, [title !== undefined ? sanitizeText(title) : null, sanitizeText(artist) || null, type, is_public, comment_access, id, artist !== undefined]);
 
             res.json({ playlist: addResourceUrls(result.rows[0]) });
         } catch (err) {
@@ -235,10 +231,69 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
     });
 
     /**
+     * POST /api/playlists/:id/tracks/batch
+     * Add up to 100 owned tracks in one transaction.
+     */
+    router.post('/:id/tracks/batch', requireAuth, async (req, res) => {
+        const { id } = req.params;
+        const trackIds = req.body.trackIds;
+        if (!Array.isArray(trackIds) || trackIds.length < 1 || trackIds.length > 100
+            || new Set(trackIds).size !== trackIds.length || trackIds.some((value) => !isUuid(value))) {
+            return res.status(400).json({ error: 'trackIds must contain 1-100 unique track IDs' });
+        }
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [id]);
+            const playlist = await client.query('SELECT owner_id FROM playlists WHERE id = $1 FOR UPDATE', [id]);
+            if (!playlist.rows.length) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ error: 'Playlist not found' });
+            }
+            if (playlist.rows[0].owner_id !== req.user.id) {
+                await client.query('ROLLBACK');
+                return res.status(403).json({ error: 'Access denied' });
+            }
+            const inserted = await client.query(`
+                WITH requested AS (
+                    SELECT track_id, ordinal
+                    FROM unnest($2::uuid[]) WITH ORDINALITY AS r(track_id, ordinal)
+                ), owned AS (
+                    SELECT r.track_id, r.ordinal
+                    FROM requested r JOIN tracks t ON t.id = r.track_id
+                    WHERE t.owner_id = $3
+                ), base AS (
+                    SELECT COALESCE(MAX(sort_order), -1) AS value
+                    FROM playlist_tracks WHERE playlist_id = $1
+                )
+                INSERT INTO playlist_tracks (playlist_id, track_id, sort_order)
+                SELECT $1, owned.track_id, base.value + owned.ordinal
+                FROM owned CROSS JOIN base
+                ON CONFLICT (playlist_id, track_id) DO NOTHING
+                RETURNING track_id
+            `, [id, trackIds, req.user.id]);
+            const owned = await client.query('SELECT COUNT(*)::int AS count FROM tracks WHERE id = ANY($1::uuid[]) AND owner_id = $2', [trackIds, req.user.id]);
+            if (owned.rows[0].count !== trackIds.length) {
+                await client.query('ROLLBACK');
+                return res.status(403).json({ error: 'All tracks must exist and belong to you' });
+            }
+            await client.query('COMMIT');
+            res.status(201).json({ success: true, added: inserted.rowCount });
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error('Batch add tracks error:', error);
+            res.status(500).json({ error: 'Failed to add tracks' });
+        } finally {
+            client.release();
+        }
+    });
+
+    /**
      * POST /api/playlists/:id/tracks
      * Add a track to playlist
      */
     router.post('/:id/tracks', requireAuth, async (req, res) => {
+        const client = await pool.connect();
         try {
             const { id } = req.params;
             const { trackId } = req.body;
@@ -248,49 +303,54 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             }
 
             // Verify playlist ownership
-            const playlist = await pool.query(
+            await client.query('BEGIN');
+            await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [id]);
+            const playlist = await client.query(
                 'SELECT owner_id FROM playlists WHERE id = $1',
                 [id]
             );
 
             if (playlist.rows.length === 0) {
+                await client.query('ROLLBACK');
                 return res.status(404).json({ error: 'Playlist not found' });
             }
 
             if (playlist.rows[0].owner_id !== req.user.id) {
+                await client.query('ROLLBACK');
                 return res.status(403).json({ error: 'Access denied' });
             }
 
             // Verify track exists and user owns it
-            const track = await pool.query(
+            const track = await client.query(
                 'SELECT owner_id FROM tracks WHERE id = $1',
                 [trackId]
             );
 
             if (track.rows.length === 0) {
+                await client.query('ROLLBACK');
                 return res.status(404).json({ error: 'Track not found' });
             }
 
             if (track.rows[0].owner_id !== req.user.id) {
+                await client.query('ROLLBACK');
                 return res.status(403).json({ error: 'You can only add your own tracks' });
             }
 
-            // Get next sort order
-            const orderResult = await pool.query(
-                'SELECT COALESCE(MAX(sort_order), -1) + 1 as next_order FROM playlist_tracks WHERE playlist_id = $1',
-                [id]
-            );
-
-            await pool.query(`
+            await client.query(`
                 INSERT INTO playlist_tracks (playlist_id, track_id, sort_order)
-                VALUES ($1, $2, $3)
+                SELECT $1, $2, COALESCE(MAX(sort_order), -1) + 1
+                FROM playlist_tracks WHERE playlist_id = $1
                 ON CONFLICT (playlist_id, track_id) DO NOTHING
-            `, [id, trackId, orderResult.rows[0].next_order]);
+            `, [id, trackId]);
 
+            await client.query('COMMIT');
             res.status(201).json({ success: true });
         } catch (err) {
+            await client.query('ROLLBACK');
             console.error('Add track to playlist error:', err);
             res.status(500).json({ error: 'Failed to add track' });
+        } finally {
+            client.release();
         }
     });
 
@@ -336,8 +396,8 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
         const { id } = req.params;
         const { trackIds } = req.body;
 
-        if (!Array.isArray(trackIds)) {
-            return res.status(400).json({ error: 'trackIds must be an array' });
+        if (!Array.isArray(trackIds) || new Set(trackIds).size !== trackIds.length || trackIds.some((value) => !isUuid(value))) {
+            return res.status(400).json({ error: 'trackIds must be a unique array of track IDs' });
         }
 
         // Verify playlist ownership
@@ -357,12 +417,22 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
-
-            for (let i = 0; i < trackIds.length; i++) {
-                await client.query(
-                    'UPDATE playlist_tracks SET sort_order = $1 WHERE playlist_id = $2 AND track_id = $3',
-                    [i, id, trackIds[i]]
-                );
+            await client.query('SET CONSTRAINTS playlist_tracks_order_unique DEFERRED');
+            await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [id]);
+            const current = await client.query('SELECT COUNT(*)::int AS count FROM playlist_tracks WHERE playlist_id = $1', [id]);
+            if (current.rows[0].count !== trackIds.length) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ error: 'trackIds must contain every playlist track exactly once' });
+            }
+            const updated = await client.query(`
+                UPDATE playlist_tracks pt
+                SET sort_order = ordered.ordinal - 1
+                FROM unnest($2::uuid[]) WITH ORDINALITY AS ordered(track_id, ordinal)
+                WHERE pt.playlist_id = $1 AND pt.track_id = ordered.track_id
+            `, [id, trackIds]);
+            if (updated.rowCount !== trackIds.length) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ error: 'trackIds contains an unknown track' });
             }
 
             await client.query('COMMIT');
@@ -436,7 +506,8 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
      * Upload cover art for a playlist
      * Requirements: Square aspect ratio, max 20MB upload, auto-compress if >6MB
      */
-    router.post('/:id/cover', requireAuth, uploadLimiter, upload.single('cover'), async (req, res) => {
+    router.post('/:id/cover', requireAuth, uploadLimiter, uploadDeadline(2 * 60 * 1000), coverUpload.single('cover'), async (req, res) => {
+        let storageKey;
         try {
             const { id } = req.params;
 
@@ -474,20 +545,15 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 return res.status(403).json({ error: 'Access denied' });
             }
 
-            // Delete old cover art if exists
-            const oldCoverPath = playlist.rows[0].cover_art_path;
-            if (oldCoverPath) {
-                try {
-                    const oldKey = oldCoverPath.replace(/^.*\/storage\//, '');
-                    await minioClient.removeObject(BUCKET_NAME, oldKey);
-                } catch (e) {
-                    console.error('Failed to delete old cover:', e.message);
-                }
-            }
-
+            await prepareCover(req.file);
             // Generate storage key
             const fileExt = req.file.mimetype.split('/')[1] === 'jpeg' ? 'jpg' : req.file.mimetype.split('/')[1];
-            const storageKey = `covers/playlists/${id}_${Date.now()}.${fileExt}`;
+            storageKey = `covers/playlists/${id}_${crypto.randomBytes(16).toString('hex')}.${fileExt}`;
+
+            await stageStorageObject(pool, {
+                storageKey, bucket: BUCKET_NAME, ownerId: req.user.id,
+                sizeBytes: req.file.size, mimeType: req.file.mimetype,
+            });
 
             // Upload to MinIO from disk
             await minioClient.fPutObject(
@@ -497,24 +563,37 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 { 'Content-Type': req.file.mimetype }
             );
 
-            // Clean up temp file
-            fs.unlink(req.file.path, () => {});
-
             // Generate the cover art URL path
             const coverArtPath = `/api/storage/${storageKey}`;
 
-            // Update playlist
-            const result = await pool.query(`
-                UPDATE playlists 
-                SET cover_art_path = $1
-                WHERE id = $2
-                RETURNING *
-            `, [coverArtPath, id]);
+            const client = await pool.connect();
+            let result;
+            try {
+                await client.query('BEGIN');
+                result = await client.query(`
+                    UPDATE playlists SET cover_art_path = $1 WHERE id = $2 AND owner_id = $3 RETURNING *
+                `, [coverArtPath, id, req.user.id]);
+                if (!result.rows.length) {
+                    const error = new Error('Playlist no longer exists');
+                    error.statusCode = 404;
+                    throw error;
+                }
+                await activateStorageObject(client, storageKey, 'PLAYLIST_COVER', id);
+                await client.query('COMMIT');
+            } catch (error) {
+                await client.query('ROLLBACK');
+                throw error;
+            } finally {
+                client.release();
+            }
 
             res.json({ playlist: addResourceUrls(result.rows[0]) });
         } catch (err) {
+            if (storageKey) await abandonStorageObject(pool, storageKey, BUCKET_NAME).catch(() => {});
             console.error('Upload cover art error:', err);
-            res.status(500).json({ error: 'Failed to upload cover art' });
+            res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to upload cover art' });
+        } finally {
+            if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
         }
     });
 
@@ -538,17 +617,6 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
 
             if (playlist.rows[0].owner_id !== req.user.id) {
                 return res.status(403).json({ error: 'Access denied' });
-            }
-
-            // Delete from storage if exists
-            const coverPath = playlist.rows[0].cover_art_path;
-            if (coverPath) {
-                try {
-                    const storageKey = coverPath.replace(/^.*\/storage\//, '');
-                    await minioClient.removeObject(BUCKET_NAME, storageKey);
-                } catch (e) {
-                    console.error('Failed to delete cover from storage:', e.message);
-                }
             }
 
             // Update playlist

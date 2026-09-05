@@ -2,12 +2,18 @@ const express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
 const rateLimit = require('express-rate-limit');
-const { requireAuth, requireAuthWithQuery, optionalAuth } = require('../middleware/auth');
+const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { sanitizeText } = require('../lib/text');
+const { validateMetadata } = require('../lib/metadata');
+const { mutateVersion } = require('../lib/versions');
+const { prepareCover, audioDuration } = require('../lib/media');
 const { evaluateResourceAccess, isUuid } = require('../lib/access');
-const { addResourceUrls, streamUrl } = require('../lib/grants');
+const { addResourceUrls, issueGrant, readGrant, streamUrl } = require('../lib/grants');
+const { uploadDeadline } = require('../lib/uploads');
+const { sendObject, streamFailure } = require('../lib/streaming');
+const { decodeCursor, pageLimit, pageResult } = require('../lib/pagination');
+const { abandonStorageObject, activateStorageObject, stageStorageObject } = require('../lib/object-lifecycle');
 
-const router = express.Router();
 
 // Rate limiter for upload endpoints — 10/minute per IP
 const uploadLimiter = rateLimit({
@@ -18,7 +24,10 @@ const uploadLimiter = rateLimit({
     message: { error: 'Too many uploads. Please wait a moment.' },
 });
 
-module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
+module.exports = function(pool, minioClient, BUCKET_NAME, uploads) {
+    const router = require('../lib/router').createRouter();
+        const audioUpload = uploads.audio || uploads;
+    const coverUpload = uploads.cover || uploads;
     
     /**
      * GET /api/tracks
@@ -26,6 +35,8 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
      */
     router.get('/', requireAuth, async (req, res) => {
         try {
+            const limit = pageLimit(req.query.limit);
+            const cursor = decodeCursor(req.query.cursor, ['updated_at', 'id']);
             const result = await pool.query(`
                 SELECT t.*, 
                        tv.duration_seconds,
@@ -33,13 +44,16 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 FROM tracks t
                 LEFT JOIN track_versions tv ON t.current_version_id = tv.id
                 WHERE t.owner_id = $1
-                ORDER BY t.updated_at DESC
-            `, [req.user.id]);
+                  AND ($2::timestamptz IS NULL OR (t.updated_at, t.id) < ($2::timestamptz, $3::uuid))
+                ORDER BY t.updated_at DESC, t.id DESC
+                LIMIT $4
+            `, [req.user.id, cursor?.updated_at || null, cursor?.id || null, limit + 1]);
 
-            res.json({ tracks: result.rows.map(addResourceUrls) });
+            const page = pageResult(result.rows, limit, (row) => ({ updated_at: row.updated_at, id: row.id }));
+            res.json({ tracks: page.items.map(addResourceUrls), next_cursor: page.next_cursor });
         } catch (err) {
             console.error('List tracks error:', err);
-            res.status(500).json({ error: 'Failed to list tracks' });
+            res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to list tracks' });
         }
     });
 
@@ -50,6 +64,8 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
     router.post('/', requireAuth, async (req, res) => {
         try {
             const { title, artist, status = 'WIP', type = 'RELEASE' } = req.body;
+            const invalid = validateMetadata(req.body, 'track', true);
+            if (invalid) return res.status(400).json({ error: invalid });
 
             const sanitizedTitle = sanitizeText(title);
             if (!sanitizedTitle) {
@@ -143,6 +159,8 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
         try {
             const { id } = req.params;
             const { title, artist, status, type, release_status, comment_access } = req.body;
+            const invalid = validateMetadata(req.body, 'track');
+            if (invalid) return res.status(400).json({ error: invalid });
 
             // Verify ownership
             const existing = await pool.query(
@@ -161,7 +179,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             const result = await pool.query(`
                 UPDATE tracks
                 SET title = COALESCE($1, title),
-                    artist = COALESCE($2, artist),
+                    artist = CASE WHEN $8 THEN $2 ELSE artist END,
                     status = COALESCE($3, status),
                     type = COALESCE($4, type),
                     release_status = COALESCE($5, release_status),
@@ -169,7 +187,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = $7
                 RETURNING *
-            `, [title ? sanitizeText(title) : null, artist ? sanitizeText(artist) : null, status, type, release_status, comment_access, id]);
+            `, [title !== undefined ? sanitizeText(title) : null, sanitizeText(artist) || null, status, type, release_status, comment_access, id, artist !== undefined]);
 
             res.json({ track: addResourceUrls(result.rows[0]) });
         } catch (err) {
@@ -200,22 +218,7 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 return res.status(403).json({ error: 'Access denied' });
             }
 
-            // Get all versions to delete from storage
-            const versions = await pool.query(
-                'SELECT storage_key FROM track_versions WHERE track_id = $1',
-                [id]
-            );
-
-            // Delete from MinIO
-            for (const version of versions.rows) {
-                try {
-                    await minioClient.removeObject(BUCKET_NAME, version.storage_key);
-                } catch (e) {
-                    console.error('MinIO delete error:', e.message);
-                }
-            }
-
-            // Delete from DB (cascades to versions, attachments)
+            // Database triggers enqueue object deletion transactionally.
             await pool.query('DELETE FROM tracks WHERE id = $1', [id]);
 
             res.json({ success: true });
@@ -232,6 +235,8 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
     router.get('/:id/versions', requireAuth, async (req, res) => {
         try {
             const { id } = req.params;
+            const limit = pageLimit(req.query.limit);
+            const cursor = decodeCursor(req.query.cursor, ['version_number', 'id']);
 
             // Verify ownership
             const track = await pool.query(
@@ -251,13 +256,16 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 SELECT id, version_number, filename, mime_type, size_bytes, duration_seconds, created_at
                 FROM track_versions
                 WHERE track_id = $1
-                ORDER BY version_number DESC
-            `, [id]);
+                  AND ($2::int IS NULL OR (version_number, id) < ($2::int, $3::uuid))
+                ORDER BY version_number DESC, id DESC
+                LIMIT $4
+            `, [id, cursor?.version_number || null, cursor?.id || null, limit + 1]);
 
-            res.json({ versions: result.rows });
+            const page = pageResult(result.rows, limit, (row) => ({ version_number: row.version_number, id: row.id }));
+            res.json({ versions: page.items, next_cursor: page.next_cursor });
         } catch (err) {
             console.error('List versions error:', err);
-            res.status(500).json({ error: 'Failed to list versions' });
+            res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to list versions' });
         }
     });
 
@@ -265,7 +273,8 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
      * POST /api/tracks/:id/versions
      * Upload a new version of a track
      */
-    router.post('/:id/versions', requireAuth, uploadLimiter, upload.single('audio'), async (req, res) => {
+    router.post('/:id/versions', requireAuth, uploadLimiter, uploadDeadline(15 * 60 * 1000), audioUpload.single('audio'), async (req, res) => {
+        let storageKey;
         try {
             const { id } = req.params;
 
@@ -296,16 +305,18 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 return res.status(403).json({ error: 'Access denied' });
             }
 
-            // Get next version number
-            const versionResult = await pool.query(
-                'SELECT COALESCE(MAX(version_number), 0) + 1 as next_version FROM track_versions WHERE track_id = $1',
-                [id]
-            );
-            const versionNumber = versionResult.rows[0].next_version;
+            // Generate an immutable key independently of display version numbering.
+            const durationSeconds = await audioDuration(req.file);
+            const fileExt = req.file.mimetype === 'audio/mpeg' || req.file.mimetype === 'audio/mp3' ? 'mp3' : 'wav';
+            storageKey = `tracks/${id}/versions/${crypto.randomBytes(16).toString('hex')}.${fileExt}`;
 
-            // Generate storage key
-            const fileExt = req.file.originalname.split('.').pop();
-            const storageKey = `tracks/${id}/v${versionNumber}_${Date.now()}.${fileExt}`;
+            await stageStorageObject(pool, {
+                storageKey,
+                bucket: BUCKET_NAME,
+                ownerId: req.user.id,
+                sizeBytes: req.file.size,
+                mimeType: req.file.mimetype,
+            });
 
             // Upload to MinIO from disk (streams file, avoids loading into memory)
             await minioClient.fPutObject(
@@ -315,35 +326,33 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 { 'Content-Type': req.file.mimetype }
             );
 
-            // Extract duration using music-metadata
-            let durationSeconds = 0;
+            const client = await pool.connect();
+            let newVersion;
             try {
-                const { parseFile } = await import('music-metadata');
-                const metadata = await parseFile(req.file.path);
-                if (metadata.format.duration) {
-                    durationSeconds = Math.round(metadata.format.duration);
-                }
-            } catch (err) {
-                console.error('Failed to parse audio duration:', err.message);
+                await client.query('BEGIN');
+                await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [id]);
+                const versionResult = await client.query(
+                    'SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version FROM track_versions WHERE track_id = $1',
+                    [id]
+                );
+                const result = await client.query(`
+                    INSERT INTO track_versions (track_id, version_number, filename, storage_key, mime_type, size_bytes, duration_seconds)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    RETURNING *
+                `, [id, versionResult.rows[0].next_version, req.file.originalname, storageKey, req.file.mimetype, req.file.size, durationSeconds]);
+                newVersion = result.rows[0];
+                await client.query(
+                    'UPDATE tracks SET current_version_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+                    [newVersion.id, id]
+                );
+                await activateStorageObject(client, storageKey, 'TRACK_VERSION', newVersion.id);
+                await client.query('COMMIT');
+            } catch (error) {
+                await client.query('ROLLBACK');
+                throw error;
+            } finally {
+                client.release();
             }
-
-            // Clean up temp file
-            fs.unlink(req.file.path, () => {});
-
-            // Create version record
-            const result = await pool.query(`
-                INSERT INTO track_versions (track_id, version_number, filename, storage_key, mime_type, size_bytes, duration_seconds)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                RETURNING *
-            `, [id, versionNumber, req.file.originalname, storageKey, req.file.mimetype, req.file.size, durationSeconds]);
-
-            const newVersion = result.rows[0];
-
-            // Update track's current version
-            await pool.query(
-                'UPDATE tracks SET current_version_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-                [newVersion.id, id]
-            );
 
             res.status(201).json({
                 version: {
@@ -354,8 +363,11 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
         } catch (err) {
             // Clean up temp file on error
             if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
+            if (storageKey) await abandonStorageObject(pool, storageKey, BUCKET_NAME).catch(() => {});
             console.error('Upload version error:', err);
-            res.status(500).json({ error: 'Failed to upload version' });
+            res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to upload version' });
+        } finally {
+            if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
         }
     });
 
@@ -456,44 +468,11 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
      */
     router.put('/:trackId/versions/:versionId/activate', requireAuth, async (req, res) => {
         try {
-            const { trackId, versionId } = req.params;
-
-            // Verify track ownership
-            const track = await pool.query(
-                'SELECT owner_id FROM tracks WHERE id = $1',
-                [trackId]
-            );
-
-            if (track.rows.length === 0) {
-                return res.status(404).json({ error: 'Track not found' });
-            }
-
-            if (track.rows[0].owner_id !== req.user.id) {
-                return res.status(403).json({ error: 'Access denied' });
-            }
-
-            // Verify version exists
-            const version = await pool.query(
-                'SELECT id FROM track_versions WHERE id = $1 AND track_id = $2',
-                [versionId, trackId]
-            );
-
-            if (version.rows.length === 0) {
-                return res.status(404).json({ error: 'Version not found' });
-            }
-
-            // Update track's current version
-            const result = await pool.query(`
-                UPDATE tracks 
-                SET current_version_id = $1, updated_at = CURRENT_TIMESTAMP
-                WHERE id = $2
-                RETURNING *
-            `, [versionId, trackId]);
-
-            res.json({ track: addResourceUrls(result.rows[0]) });
-        } catch (err) {
-            console.error('Activate version error:', err);
-            res.status(500).json({ error: 'Failed to activate version' });
+            const track = await mutateVersion(pool, req.user.id, req.params.trackId, req.params.versionId, 'activate');
+            res.json({ track: addResourceUrls(track) });
+        } catch (error) {
+            console.error('activate version error:', error);
+            res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'Failed to activate version' });
         }
     });
 
@@ -503,86 +482,50 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
      */
     router.delete('/:trackId/versions/:versionId', requireAuth, async (req, res) => {
         try {
-            const { trackId, versionId } = req.params;
-
-            // Verify track ownership
-            const track = await pool.query(
-                'SELECT owner_id, current_version_id FROM tracks WHERE id = $1',
-                [trackId]
-            );
-
-            if (track.rows.length === 0) {
-                return res.status(404).json({ error: 'Track not found' });
-            }
-
-            if (track.rows[0].owner_id !== req.user.id) {
-                return res.status(403).json({ error: 'Access denied' });
-            }
-
-            // Get version info
-            const version = await pool.query(
-                'SELECT storage_key FROM track_versions WHERE id = $1 AND track_id = $2',
-                [versionId, trackId]
-            );
-
-            if (version.rows.length === 0) {
-                return res.status(404).json({ error: 'Version not found' });
-            }
-
-            // Count total versions
-            const countResult = await pool.query(
-                'SELECT COUNT(*) as count FROM track_versions WHERE track_id = $1',
-                [trackId]
-            );
-
-            if (parseInt(countResult.rows[0].count) <= 1) {
-                return res.status(400).json({ error: 'Cannot delete the only version' });
-            }
-
-            // If deleting current version, set another as current
-            if (track.rows[0].current_version_id === versionId) {
-                const otherVersion = await pool.query(
-                    'SELECT id FROM track_versions WHERE track_id = $1 AND id != $2 ORDER BY version_number DESC LIMIT 1',
-                    [trackId, versionId]
-                );
-                
-                if (otherVersion.rows.length > 0) {
-                    await pool.query(
-                        'UPDATE tracks SET current_version_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-                        [otherVersion.rows[0].id, trackId]
-                    );
-                }
-            }
-
-            // Delete from MinIO
-            try {
-                await minioClient.removeObject(BUCKET_NAME, version.rows[0].storage_key);
-            } catch (e) {
-                console.error('MinIO delete error:', e.message);
-            }
-
-            // Delete from database
-            await pool.query('DELETE FROM track_versions WHERE id = $1', [versionId]);
-
+            const track = await mutateVersion(pool, req.user.id, req.params.trackId, req.params.versionId, 'delete');
             res.json({ success: true });
-        } catch (err) {
-            console.error('Delete version error:', err);
-            res.status(500).json({ error: 'Failed to delete version' });
+        } catch (error) {
+            console.error('delete version error:', error);
+            res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'Failed to delete version' });
+        }
+    });
+
+    router.post('/:trackId/versions/:versionId/download-grant', requireAuth, async (req, res) => {
+        try {
+            const { trackId, versionId } = req.params;
+            const result = await pool.query(`
+                SELECT tv.id FROM track_versions tv JOIN tracks t ON t.id = tv.track_id
+                WHERE tv.id = $1 AND tv.track_id = $2 AND t.owner_id = $3
+            `, [versionId, trackId, req.user.id]);
+            if (!result.rows.length) return res.status(404).json({ error: 'Version not found' });
+            const grant = issueGrant({
+                purpose: 'version-download', track_id: trackId, version_id: versionId,
+                user_id: req.user.id, auth_version: Number(req.user.auth_version),
+            }, '5m');
+            res.json({ url: `/api/tracks/${encodeURIComponent(trackId)}/versions/${encodeURIComponent(versionId)}/download?grant=${encodeURIComponent(grant)}` });
+        } catch (error) {
+            console.error('Version grant error:', error);
+            res.status(500).json({ error: 'Failed to create download grant' });
         }
     });
 
     /**
      * GET /api/tracks/:trackId/versions/:versionId/download
      * Download a specific version
-     * Accepts auth token via header OR ?auth= query param for direct browser downloads
+     * Requires a short-lived, purpose-scoped download grant.
      */
-    router.get('/:trackId/versions/:versionId/download', requireAuthWithQuery, async (req, res) => {
+    router.get('/:trackId/versions/:versionId/download', async (req, res) => {
         try {
             const { trackId, versionId } = req.params;
+            const grant = readGrant(req.query.grant, {
+                purpose: 'version-download', track_id: trackId, version_id: versionId,
+            });
+            if (!grant) return res.status(401).json({ error: 'Invalid or expired download grant' });
 
             // Verify track ownership
             const track = await pool.query(
-                'SELECT owner_id FROM tracks WHERE id = $1',
+                `SELECT t.owner_id, u.is_active, u.auth_version FROM tracks t
+                 JOIN users u ON u.id = t.owner_id WHERE t.id = $1`,
                 [trackId]
             );
 
@@ -590,7 +533,8 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 return res.status(404).json({ error: 'Track not found' });
             }
 
-            if (track.rows[0].owner_id !== req.user.id) {
+            if (track.rows[0].owner_id !== grant.user_id || !track.rows[0].is_active
+                || Number(track.rows[0].auth_version) !== Number(grant.auth_version)) {
                 return res.status(403).json({ error: 'Access denied' });
             }
 
@@ -609,15 +553,13 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
             // Stream file from MinIO
             const stat = await minioClient.statObject(BUCKET_NAME, versionData.storage_key);
             
-            res.setHeader('Content-Type', versionData.mime_type || 'application/octet-stream');
-            res.setHeader('Content-Disposition', `attachment; filename="${versionData.filename}"`);
-            res.setHeader('Content-Length', stat.size);
-
-            const stream = await minioClient.getObject(BUCKET_NAME, versionData.storage_key);
-            stream.pipe(res);
+            await sendObject(req, res, minioClient, BUCKET_NAME, versionData.storage_key, {
+                filename: versionData.filename,
+                headers: { 'Content-Type': versionData.mime_type || 'application/octet-stream', 'Content-Length': stat.size },
+            });
         } catch (err) {
             console.error('Download version error:', err);
-            res.status(500).json({ error: 'Failed to download version' });
+            streamFailure(res, err, 'Failed to download version');
         }
     });
 
@@ -626,7 +568,8 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
      * Upload cover art for a track
      * Requirements: Square aspect ratio, max 20MB upload, auto-compress if >6MB
      */
-    router.post('/:id/cover', requireAuth, uploadLimiter, upload.single('cover'), async (req, res) => {
+    router.post('/:id/cover', requireAuth, uploadLimiter, uploadDeadline(2 * 60 * 1000), coverUpload.single('cover'), async (req, res) => {
+        let storageKey;
         try {
             const { id } = req.params;
 
@@ -664,20 +607,15 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 return res.status(403).json({ error: 'Access denied' });
             }
 
-            // Delete old cover art if exists
-            const oldCoverPath = track.rows[0].cover_art_path;
-            if (oldCoverPath) {
-                try {
-                    const oldKey = oldCoverPath.replace(/^.*\/storage\//, '');
-                    await minioClient.removeObject(BUCKET_NAME, oldKey);
-                } catch (e) {
-                    console.error('Failed to delete old cover:', e.message);
-                }
-            }
-
+            await prepareCover(req.file);
             // Generate storage key
             const fileExt = req.file.mimetype.split('/')[1] === 'jpeg' ? 'jpg' : req.file.mimetype.split('/')[1];
-            const storageKey = `covers/tracks/${id}_${Date.now()}.${fileExt}`;
+            storageKey = `covers/tracks/${id}_${crypto.randomBytes(16).toString('hex')}.${fileExt}`;
+
+            await stageStorageObject(pool, {
+                storageKey, bucket: BUCKET_NAME, ownerId: req.user.id,
+                sizeBytes: req.file.size, mimeType: req.file.mimetype,
+            });
 
             // Upload to MinIO from disk
             await minioClient.fPutObject(
@@ -687,24 +625,38 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
                 { 'Content-Type': req.file.mimetype }
             );
 
-            // Clean up temp file
-            fs.unlink(req.file.path, () => {});
-
             // Generate the cover art URL path
             const coverArtPath = `/api/storage/${storageKey}`;
 
-            // Update track
-            const result = await pool.query(`
-                UPDATE tracks 
-                SET cover_art_path = $1, updated_at = CURRENT_TIMESTAMP
-                WHERE id = $2
-                RETURNING *
-            `, [coverArtPath, id]);
+            const client = await pool.connect();
+            let result;
+            try {
+                await client.query('BEGIN');
+                result = await client.query(`
+                    UPDATE tracks SET cover_art_path = $1, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $2 AND owner_id = $3 RETURNING *
+                `, [coverArtPath, id, req.user.id]);
+                if (!result.rows.length) {
+                    const error = new Error('Track no longer exists');
+                    error.statusCode = 404;
+                    throw error;
+                }
+                await activateStorageObject(client, storageKey, 'TRACK_COVER', id);
+                await client.query('COMMIT');
+            } catch (error) {
+                await client.query('ROLLBACK');
+                throw error;
+            } finally {
+                client.release();
+            }
 
             res.json({ track: addResourceUrls(result.rows[0]) });
         } catch (err) {
+            if (storageKey) await abandonStorageObject(pool, storageKey, BUCKET_NAME).catch(() => {});
             console.error('Upload cover art error:', err);
-            res.status(500).json({ error: 'Failed to upload cover art' });
+            res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Failed to upload cover art' });
+        } finally {
+            if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
         }
     });
 
@@ -728,17 +680,6 @@ module.exports = function(pool, minioClient, BUCKET_NAME, upload) {
 
             if (track.rows[0].owner_id !== req.user.id) {
                 return res.status(403).json({ error: 'Access denied' });
-            }
-
-            // Delete from storage if exists
-            const coverPath = track.rows[0].cover_art_path;
-            if (coverPath) {
-                try {
-                    const storageKey = coverPath.replace(/^.*\/storage\//, '');
-                    await minioClient.removeObject(BUCKET_NAME, storageKey);
-                } catch (e) {
-                    console.error('Failed to delete cover from storage:', e.message);
-                }
             }
 
             // Update track

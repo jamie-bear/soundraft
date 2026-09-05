@@ -3,7 +3,6 @@ const rateLimit = require('express-rate-limit');
 const { optionalAuth } = require('../middleware/auth');
 const { evaluateEntityAccess } = require('../lib/access');
 
-const router = express.Router();
 const VISITOR_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
 // Valid emoji types matching the 4 emojis from the spec
@@ -18,6 +17,7 @@ const reactionLimiter = rateLimit({
 });
 
 module.exports = function(pool) {
+    const router = require('../lib/router').createRouter();
     async function requireReactionAccess(entityType, entityId, user, shareToken) {
         const table = entityType === 'track' ? 'tracks' : 'playlists';
         const visibilityColumn = entityType === 'track' ? 'release_status' : 'is_public';

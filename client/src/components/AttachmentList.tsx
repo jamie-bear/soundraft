@@ -144,15 +144,15 @@ function SortableAttachment({ attachment, onRename, onDelete }: SortableAttachme
 
       {/* Actions */}
       <div className="flex items-center gap-1">
-        <a
-          href={attachmentsApi.getDownloadUrl(attachment.id)}
+        <button
+          onClick={async () => { window.location.assign(await attachmentsApi.getDownloadUrl(attachment.id)) }}
           className="rounded p-1.5 text-surface-400 hover:bg-surface-800 hover:text-white transition-colors"
           title="Download"
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
           </svg>
-        </a>
+        </button>
         <button
           onClick={() => onDelete(attachment.id)}
           className="rounded p-1.5 text-surface-400 hover:bg-surface-800 hover:text-red-400 transition-colors"

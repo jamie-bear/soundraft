@@ -81,6 +81,40 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
   return data
 }
 
+async function requestAllPages<T, K extends string>(endpoint: string, key: K): Promise<Record<K, T[]>> {
+  const items: T[] = []
+  let cursor: string | null = null
+  do {
+    const separator = endpoint.includes('?') ? '&' : '?'
+    const pageEndpoint: string = `${endpoint}${separator}limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
+    const page: Record<K, T[]> & { next_cursor?: string | null } =
+      await request<Record<K, T[]> & { next_cursor?: string | null }>(pageEndpoint)
+    items.push(...page[key])
+    cursor = page.next_cursor || null
+  } while (cursor)
+  return { [key]: items } as Record<K, T[]>
+}
+
+async function requestAllCommentPages(endpoint: string): Promise<{
+  comments: Comment[]; canPost: boolean; commentsHidden?: boolean
+}> {
+  const comments: Comment[] = []
+  let cursor: string | null = null
+  let canPost = false
+  let commentsHidden = false
+  do {
+    const separator = endpoint.includes('?') ? '&' : '?'
+    const page: { comments: Comment[]; canPost: boolean; commentsHidden?: boolean; next_cursor?: string | null } = await request<{
+      comments: Comment[]; canPost: boolean; commentsHidden?: boolean; next_cursor?: string | null
+    }>(`${endpoint}${separator}limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`)
+    comments.push(...page.comments)
+    canPost = page.canPost
+    commentsHidden = Boolean(page.commentsHidden)
+    cursor = page.next_cursor || null
+  } while (cursor)
+  return { comments, canPost, commentsHidden }
+}
+
 // Auth API
 export const authApi = {
   login: (email: string, password: string) =>
@@ -102,7 +136,7 @@ export const authApi = {
 
 // Tracks API
 export const tracksApi = {
-  list: () => request<{ tracks: Track[] }>('/tracks'),
+  list: () => requestAllPages<Track, 'tracks'>('/tracks', 'tracks'),
 
   get: (id: string, token?: string) =>
     request<{ track: Track; isOwner: boolean }>(
@@ -125,7 +159,7 @@ export const tracksApi = {
     request<{ success: boolean }>(`/tracks/${id}`, { method: 'DELETE' }),
 
   getVersions: (id: string) =>
-    request<{ versions: TrackVersion[] }>(`/tracks/${id}/versions`),
+    requestAllPages<TrackVersion, 'versions'>(`/tracks/${id}/versions`, 'versions'),
 
   uploadVersion: async (
     id: string,
@@ -193,9 +227,9 @@ export const tracksApi = {
       method: 'DELETE',
     }),
 
-  getVersionDownloadUrl: (trackId: string, versionId: string) => {
-    const token = localStorage.getItem('token')
-    return `${API_URL}/tracks/${trackId}/versions/${versionId}/download?auth=${token}`
+  getVersionDownloadUrl: async (trackId: string, versionId: string) => {
+    const result = await request<{ url: string }>(`/tracks/${trackId}/versions/${versionId}/download-grant`, { method: 'POST' })
+    return result.url
   },
 
   uploadCover: async (id: string, file: File) => {
@@ -229,8 +263,8 @@ export interface PlaylistWithTrackInfo extends Playlist {
 
 export const playlistsApi = {
   list: (forTrack?: string) => 
-    request<{ playlists: PlaylistWithTrackInfo[] }>(
-      `/playlists${forTrack ? `?forTrack=${forTrack}` : ''}`
+    requestAllPages<PlaylistWithTrackInfo, 'playlists'>(
+      `/playlists${forTrack ? `?forTrack=${forTrack}` : ''}`, 'playlists'
     ),
 
   get: (id: string, token?: string) =>
@@ -257,6 +291,12 @@ export const playlistsApi = {
     request<{ success: boolean }>(`/playlists/${id}/tracks`, {
       method: 'POST',
       body: JSON.stringify({ trackId }),
+    }),
+
+  addTracks: (id: string, trackIds: string[]) =>
+    request<{ success: boolean; added: number }>(`/playlists/${id}/tracks/batch`, {
+      method: 'POST',
+      body: JSON.stringify({ trackIds }),
     }),
 
   removeTrack: (id: string, trackId: string) =>
@@ -309,7 +349,7 @@ export const playlistsApi = {
 export const commentsApi = {
   // Track comments
   listTrackComments: (trackId: string, token?: string) =>
-    request<{ comments: Comment[]; canPost: boolean; commentsHidden?: boolean }>(
+    requestAllCommentPages(
       `/comments/track/${trackId}${token ? `?token=${token}` : ''}`
     ),
 
@@ -321,7 +361,7 @@ export const commentsApi = {
 
   // Playlist comments
   listPlaylistComments: (playlistId: string, token?: string) =>
-    request<{ comments: Comment[]; canPost: boolean; commentsHidden?: boolean }>(
+    requestAllCommentPages(
       `/comments/playlist/${playlistId}${token ? `?token=${token}` : ''}`
     ),
 
@@ -339,7 +379,7 @@ export const commentsApi = {
 // Attachments API
 export const attachmentsApi = {
   list: (trackId: string) =>
-    request<{ attachments: Attachment[] }>(`/attachments/track/${trackId}`),
+    requestAllPages<Attachment, 'attachments'>(`/attachments/track/${trackId}`, 'attachments'),
 
   upload: async (trackId: string, file: File) => {
     const formData = new FormData()
@@ -361,9 +401,9 @@ export const attachmentsApi = {
     return data as { attachment: Attachment }
   },
 
-  getDownloadUrl: (id: string) => {
-    const token = localStorage.getItem('token')
-    return `${API_URL}/attachments/${id}/download?auth=${token}`
+  getDownloadUrl: async (id: string) => {
+    const result = await request<{ url: string }>(`/attachments/${id}/download-grant`, { method: 'POST' })
+    return result.url
   },
 
   rename: (id: string, filename: string) =>
@@ -598,9 +638,12 @@ export const reactionsApi = {
 
 // Export API
 export const exportApi = {
-  getLibraryExportUrl: (mode: 'tracks' | 'playlists') => {
-    const token = localStorage.getItem('token')
-    return `${API_URL}/export/library?mode=${mode}&auth=${token}`
+  getLibraryExportUrl: async (mode: 'tracks' | 'playlists') => {
+    const result = await request<{ url: string }>('/export/grant', {
+      method: 'POST',
+      body: JSON.stringify({ mode }),
+    })
+    return result.url
   },
 }
 
